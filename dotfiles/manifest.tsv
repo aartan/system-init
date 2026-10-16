@@ -1,0 +1,11 @@
+# system-init dotfiles manifest
+# Columns: module<TAB>strategy<TAB>platforms<TAB>source<TAB>target
+# strategy: symlink | copy
+# platforms: all | fedora | macos, comma-separated
+# target is relative to $HOME.
+core	symlink	all	dotfiles/home/.gitconfig	.gitconfig
+terminal	symlink	all	dotfiles/home/.zshrc	.zshrc
+terminal	symlink	all	dotfiles/home/.p10k.zsh	.p10k.zsh
+terminal	symlink	all	dotfiles/home/.config/alacritty/alacritty.toml	.config/alacritty/alacritty.toml
+terminal	symlink	all	dotfiles/home/.config/btop/btop.conf	.config/btop/btop.conf
+editors	symlink	all	dotfiles/home/.config/Code/User/settings.json	.config/Code/User/settings.json

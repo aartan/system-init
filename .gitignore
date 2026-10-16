@@ -1,0 +1,41 @@
+# Runtime state and secrets are never tracked.
+
+# Local state and backups
+.local/
+state/
+backups/
+*.log
+
+# Shell history and credentials
+.zsh_history
+.bash_history
+.ssh/
+.gnupg/
+.claude/
+.claude.json
+.config/stripe/
+.config/opencode/service.json
+.config/masar/
+.config/gh/
+.config/git/credentials
+.netrc
+.npmrc
+.pypirc
+
+# Browser and editor profiles
+.config/google-chrome/
+.config/BraveSoftware/
+.config/chromium/
+.config/Code/User/globalStorage/
+.config/Code/User/workspaceStorage/
+.config/Code/User/chatLanguageModels.json
+.config/Code/Trust Tokens
+
+# Operating system and editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+__pycache__/
+*.pyc

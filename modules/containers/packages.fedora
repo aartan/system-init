@@ -1,0 +1,8 @@
+dnf podman
+dnf podman-compose
+dnf buildah
+dnf skopeo
+dnf passt
+dnf slirp4netns
+dnf fuse-overlayfs
+flatpak io.podman_desktop.PodmanDesktop optional

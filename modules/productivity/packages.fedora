@@ -1,0 +1,8 @@
+flatpak md.obsidian.Obsidian optional
+flatpak org.keepassxc.KeePassXC optional
+flatpak me.proton.Mail optional
+flatpak me.proton.Pass optional
+flatpak com.protonvpn.www optional
+flatpak io.github.shiftey.Desktop optional
+flatpak com.github.tchx84.Flatseal optional
+flatpak com.mattjakeman.ExtensionManager optional

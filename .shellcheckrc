@@ -1,0 +1,6 @@
+# ShellCheck configuration for system-init.
+#
+# Sourced library paths are resolved at runtime through $REPO_ROOT, so the
+# analyzer cannot follow them statically. This is intentional; every source
+# statement is annotated where the target is known.
+disable=SC1091

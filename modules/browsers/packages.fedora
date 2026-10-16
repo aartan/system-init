@@ -1,0 +1,3 @@
+dnf firefox
+dnf brave-browser
+flatpak com.google.Chrome optional

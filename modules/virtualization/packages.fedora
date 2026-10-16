@@ -1,0 +1,9 @@
+dnf virt-manager
+dnf qemu-kvm
+dnf libvirt-client
+dnf libvirt-daemon-kvm
+dnf libvirt-daemon-config-network
+dnf libvirt-daemon-config-nwfilter
+dnf virt-install
+dnf edk2-ovmf
+dnf swtpm

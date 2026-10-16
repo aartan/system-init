@@ -1,0 +1,2 @@
+dnf java-25-openjdk-headless
+dnf python3-pip

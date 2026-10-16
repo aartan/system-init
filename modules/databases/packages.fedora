@@ -1,0 +1,7 @@
+dnf postgresql
+dnf postgresql-server
+dnf postgresql-contrib
+dnf valkey
+dnf valkey-compat-redis
+flatpak io.dbeaver.DBeaverCommunity optional
+flatpak org.pgadmin.pgadmin4 optional

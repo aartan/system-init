@@ -1,0 +1,12 @@
+dnf zsh
+dnf tmux
+dnf fzf
+dnf ripgrep
+dnf fd-find
+dnf bat
+dnf eza
+dnf btop
+dnf nmap-ncat
+dnf alacritty
+dnf zsh-autosuggestions
+dnf zsh-syntax-highlighting
