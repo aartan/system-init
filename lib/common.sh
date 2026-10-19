@@ -9,7 +9,7 @@ DEV_SETUP_COMMON_SOURCED=1
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 TARGET_HOME="${DEV_SETUP_TARGET_HOME:-$HOME}"
-# Used by the backup, keyd, and shell installers.
+# Used by the backup and shell installers.
 # shellcheck disable=SC2034
 TARGET_USER="${DEV_SETUP_TARGET_USER:-$(id -un)}"
 STATE_DIR="${XDG_STATE_HOME:-$TARGET_HOME/.local/state}/system-init"

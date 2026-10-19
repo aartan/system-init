@@ -16,7 +16,6 @@ source "$REPO_ROOT/lib/backups.sh"
 
 SNAPSHOT=""
 RESTORE_LATEST=0
-ALLOW_SYSTEM=0
 SHOW_LIST=0
 
 usage() {
@@ -27,7 +26,6 @@ Options:
   --latest          Restore the newest snapshot.
   --snapshot PATH   Restore a specific snapshot directory.
   --list            List available snapshots and exit.
-  --system          Also restore paths outside $HOME (for example /etc/keyd).
   --dry-run         Show what would be restored; change nothing.
   -h, --help        Show this help.
 EOF
@@ -51,9 +49,6 @@ while (( $# > 0 )); do
       ;;
     --list)
       SHOW_LIST=1
-      ;;
-    --system)
-      ALLOW_SYSTEM=1
       ;;
     --dry-run)
       DRY_RUN=1
@@ -115,22 +110,10 @@ if [[ ! -d "$SNAPSHOT" ]]; then
   exit 1
 fi
 
-if [[ "$ALLOW_SYSTEM" == "1" && "$DRY_RUN" != "1" ]]; then
-  if ! sudo -n true >/dev/null 2>&1; then
-    if [[ -t 0 ]]; then
-      log_info "System restore requested; requesting sudo access."
-      sudo -v
-    else
-      log_error "--system requires sudo, but stdin is not a terminal."
-      exit 1
-    fi
-  fi
-fi
-
 log_section "system-init restore"
 log_info "Snapshot: $SNAPSHOT"
 if [[ "$DRY_RUN" == "1" ]]; then
   log_warn "Dry-run mode: no files will be restored."
 fi
 
-backup_restore_snapshot "$SNAPSHOT" "$ALLOW_SYSTEM" || exit 1
+backup_restore_snapshot "$SNAPSHOT" || exit 1

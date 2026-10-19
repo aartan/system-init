@@ -133,7 +133,6 @@ backup_manifest_targets() {
 backup_restore_path() {
   local original="$1"
   local stored="$2"
-  local use_sudo="$3"
 
   if [[ ! -e "$stored" && ! -L "$stored" ]]; then
     log_error "Backup payload missing: $stored"
@@ -148,26 +147,17 @@ backup_restore_path() {
   mkdir -p -- "$(dirname -- "$original")" || return 1
 
   if [[ -e "$original" || -L "$original" ]]; then
-    if [[ "$use_sudo" == "1" ]]; then
-      run_sudo rm -rf -- "$original" || return 1
-    else
-      rm -rf -- "$original" || return 1
-    fi
+    rm -rf -- "$original" || return 1
   fi
 
-  if [[ "$use_sudo" == "1" ]]; then
-    run_sudo cp -a --no-dereference -- "$stored" "$original" || return 1
-  else
-    cp -a --no-dereference -- "$stored" "$original" || return 1
-  fi
+  cp -a --no-dereference -- "$stored" "$original" || return 1
 
   log_success "Restored $original"
 }
 
 backup_restore_snapshot() {
   local snapshot="$1"
-  local allow_system="${2:-0}"
-  local original stored kind use_sudo
+  local original stored kind
   local restored=0 skipped=0
 
   backup_snapshot_exists "$snapshot" || {
@@ -184,17 +174,12 @@ backup_restore_snapshot() {
     [[ "$original" == \#* ]] && continue
 
     if ! path_is_under "$original" "$TARGET_HOME"; then
-      if [[ "$allow_system" != "1" ]]; then
-        log_warn "Skipping system path (use --system to restore): $original"
-        skipped=$((skipped + 1))
-        continue
-      fi
-      use_sudo=1
-    else
-      use_sudo=0
+      log_warn "Skipping path outside \$HOME: $original"
+      skipped=$((skipped + 1))
+      continue
     fi
 
-    backup_restore_path "$original" "$stored" "$use_sudo" || return 1
+    backup_restore_path "$original" "$stored" || return 1
     restored=$((restored + 1))
   done <"$snapshot/manifest.tsv"
 

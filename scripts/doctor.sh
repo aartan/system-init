@@ -27,8 +27,6 @@ source "$REPO_ROOT/installers/flatpak.sh"
 source "$REPO_ROOT/installers/mise.sh"
 # shellcheck source=installers/fonts.sh
 source "$REPO_ROOT/installers/fonts.sh"
-# shellcheck source=installers/keyd.sh
-source "$REPO_ROOT/installers/keyd.sh"
 
 # shellcheck disable=SC2034
 CURRENT_MODULE="doctor"
@@ -214,38 +212,6 @@ if [[ -f "$TARGET_HOME/.config/alacritty/alacritty.toml" ]]; then
   ok "Alacritty configuration is present."
 else
   fail "Alacritty configuration is missing."
-fi
-
-# ---------------------------------------------------------------------------
-# keyd
-# ---------------------------------------------------------------------------
-log_section "keyd"
-if [[ "$ENABLE_KEYD" == "1" ]]; then
-  if keyd_binary_matches_pin; then
-    ok "keyd v${KEYD_VERSION} is installed."
-  else
-    fail "keyd v${KEYD_VERSION} is not installed at $KEYD_BIN."
-  fi
-
-  if systemctl is-enabled keyd.service >/dev/null 2>&1; then
-    ok "keyd.service is enabled."
-  else
-    fail "keyd.service is not enabled."
-  fi
-
-  if systemctl is-active keyd.service >/dev/null 2>&1; then
-    ok "keyd.service is active."
-  else
-    fail "keyd.service is not active."
-  fi
-
-  if keyd_config_matches_repo; then
-    ok "keyd configuration matches the repository."
-  else
-    fail "keyd configuration differs from platforms/fedora/system/keyd.conf."
-  fi
-else
-  warn "keyd management is disabled in config/settings.conf."
 fi
 
 # ---------------------------------------------------------------------------

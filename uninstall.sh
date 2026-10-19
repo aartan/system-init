@@ -23,11 +23,8 @@ source "$REPO_ROOT/lib/backups.sh"
 source "$REPO_ROOT/installers/dnf.sh"
 # shellcheck source=installers/flatpak.sh
 source "$REPO_ROOT/installers/flatpak.sh"
-# shellcheck source=installers/keyd.sh
-source "$REPO_ROOT/installers/keyd.sh"
 
 REMOVE_PACKAGES=0
-REMOVE_SYSTEM=0
 RESTORE_BACKUPS=0
 PURGE_STATE=0
 ASSUME_YES=0
@@ -53,15 +50,14 @@ By default this removes only managed dotfile links. Nothing else is touched.
 
 Options:
   --restore-backups  Restore the newest backup snapshot first.
-  --system           Disable keyd and remove /etc/keyd/default.conf (explicit).
   --packages         Remove declared Flatpak apps and non-protected DNF packages.
   --yes              Skip the package-removal confirmation prompt.
   --purge-state      Delete all system-init backups, logs, and state (explicit).
   --dry-run          Show actions without changing anything.
   -h, --help         Show this help.
 
-The keyd binary, Oh My Zsh, Powerlevel10k, mise, fonts, and user project files
-are never removed by this script.
+Oh My Zsh, Powerlevel10k, mise, fonts, and user project files are never removed
+by this script.
 EOF
 }
 
@@ -69,9 +65,6 @@ while (( $# > 0 )); do
   case "$1" in
     --restore-backups)
       RESTORE_BACKUPS=1
-      ;;
-    --system)
-      REMOVE_SYSTEM=1
       ;;
     --packages)
       REMOVE_PACKAGES=1
@@ -117,17 +110,7 @@ if [[ "$RESTORE_BACKUPS" == "1" ]]; then
     record_failure "No backup snapshot is available to restore."
   else
     log_info "Restoring newest snapshot before unlinking: $snapshot"
-    if [[ "$REMOVE_SYSTEM" == "1" && "$DRY_RUN" != "1" ]]; then
-      if ! sudo -n true >/dev/null 2>&1; then
-        if [[ -t 0 ]]; then
-          sudo -v
-        else
-          record_failure "--restore-backups --system needs sudo, but stdin is not a terminal."
-        fi
-      fi
-    fi
-    backup_restore_snapshot "$snapshot" "$([[ "$REMOVE_SYSTEM" == "1" ]] && printf '1' || printf '0')" || \
-      record_failure "Backup restore failed."
+    backup_restore_snapshot "$snapshot" || record_failure "Backup restore failed."
   fi
 fi
 
@@ -178,25 +161,6 @@ if [[ "$DRY_RUN" == "1" ]]; then
   log_dry "$removed managed path(s) would be removed; $kept unmanaged path(s) would be kept."
 else
   log_info "$removed managed path(s) removed; $kept unmanaged path(s) kept."
-fi
-
-# ---------------------------------------------------------------------------
-# keyd system configuration
-# ---------------------------------------------------------------------------
-if [[ "$REMOVE_SYSTEM" == "1" ]]; then
-  log_section "keyd system configuration"
-  if [[ -f "$KEYD_CONFIG" ]] && keyd_config_matches_repo; then
-    if [[ "$DRY_RUN" == "1" ]]; then
-      log_dry "back up and remove $KEYD_CONFIG; disable keyd.service"
-    else
-      backup_path "$KEYD_CONFIG" "uninstall-system" || record_failure "Could not back up keyd config."
-      run_sudo systemctl disable --now keyd.service || record_warning "Could not disable keyd.service."
-      run_sudo rm -f -- "$KEYD_CONFIG" || record_failure "Could not remove $KEYD_CONFIG."
-      log_success "Removed managed keyd configuration (binary left installed)."
-    fi
-  else
-    log_warn "keyd configuration is absent or was modified; leaving it untouched."
-  fi
 fi
 
 # ---------------------------------------------------------------------------

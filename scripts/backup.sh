@@ -20,8 +20,6 @@ source "$REPO_ROOT/lib/dotfiles.sh"
 # shellcheck source=../lib/backups.sh
 source "$REPO_ROOT/lib/backups.sh"
 
-INCLUDE_SYSTEM=0
-
 usage() {
   cat <<'EOF'
 Usage: ./scripts/backup.sh [OPTIONS]
@@ -30,7 +28,6 @@ Back up manifest-managed dotfiles to a timestamped snapshot outside the repo.
 
 Options:
   --dry-run   Show what would be backed up; change nothing.
-  --system    Also back up /etc/keyd/default.conf.
   -h, --help  Show this help.
 EOF
 }
@@ -39,9 +36,6 @@ while (( $# > 0 )); do
   case "$1" in
     --dry-run)
       DRY_RUN=1
-      ;;
-    --system)
-      INCLUDE_SYSTEM=1
       ;;
     -h|--help)
       usage
@@ -84,16 +78,6 @@ while IFS=$'\t' read -r module _strategy _source_rel target_rel; do
   backup_path "$target_abs" "dotfile" || record_failure "Failed to back up $target_abs"
   count=$((count + 1))
 done <<<"$entries"
-
-if [[ "$INCLUDE_SYSTEM" == "1" ]]; then
-  if [[ -e /etc/keyd/default.conf ]]; then
-    backup_path /etc/keyd/default.conf "system-config" || \
-      record_failure "Failed to back up /etc/keyd/default.conf"
-    count=$((count + 1))
-  else
-    log_warn "/etc/keyd/default.conf does not exist; nothing to back up."
-  fi
-fi
 
 prune_backups
 

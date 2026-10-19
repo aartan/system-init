@@ -32,8 +32,6 @@ source "$REPO_ROOT/installers/brew.sh"
 source "$REPO_ROOT/installers/mise.sh"
 # shellcheck source=installers/fonts.sh
 source "$REPO_ROOT/installers/fonts.sh"
-# shellcheck source=installers/keyd.sh
-source "$REPO_ROOT/installers/keyd.sh"
 # shellcheck source=installers/zsh.sh
 source "$REPO_ROOT/installers/zsh.sh"
 # shellcheck source=installers/code.sh
