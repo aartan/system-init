@@ -75,10 +75,27 @@ zsh_set_login_shell() {
     return 0
   fi
 
-  require_command chsh || return 1
-  if ! run_sudo chsh -s "$ZSH_TARGET_BIN" "$TARGET_USER"; then
-    record_failure "Failed to change the login shell for $TARGET_USER to $ZSH_TARGET_BIN"
+  if have_command chsh; then
+    if ! run_sudo chsh -s "$ZSH_TARGET_BIN" "$TARGET_USER"; then
+      record_failure "Failed to change the login shell for $TARGET_USER to $ZSH_TARGET_BIN"
+      return 1
+    fi
+  elif have_command usermod; then
+    if ! run_sudo usermod -s "$ZSH_TARGET_BIN" "$TARGET_USER"; then
+      record_failure "Failed to change the login shell for $TARGET_USER to $ZSH_TARGET_BIN"
+      return 1
+    fi
+  else
+    record_failure "Neither chsh nor usermod is available to change the login shell."
     return 1
   fi
+
+  current_shell="$(getent passwd "$TARGET_USER" | awk -F: '{ print $7 }')"
+  if [[ "$current_shell" != "$ZSH_TARGET_BIN" ]]; then
+    record_failure "Login shell for $TARGET_USER is ${current_shell:-unknown}, expected $ZSH_TARGET_BIN."
+    return 1
+  fi
+
   log_success "Changed login shell to $ZSH_TARGET_BIN"
+  log_info "Log out and back in for the new login shell to apply to existing sessions."
 }

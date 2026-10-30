@@ -138,6 +138,14 @@ fi
 log_section "Shell"
 if have_command zsh; then
   ok "zsh is installed: $(zsh --version)"
+
+  login_shell="$(getent passwd "$TARGET_USER" | awk -F: '{ print $7 }')"
+  zsh_path="$(command -v zsh)"
+  if [[ "$login_shell" == "$zsh_path" ]]; then
+    ok "Login shell for $TARGET_USER is $zsh_path."
+  else
+    fail "Login shell for $TARGET_USER is ${login_shell:-unknown}, expected $zsh_path."
+  fi
 else
   fail "zsh is not installed."
 fi
