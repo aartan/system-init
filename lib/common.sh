@@ -24,6 +24,8 @@ DEBUG="${DEBUG:-0}"
 source "$REPO_ROOT/config/settings.conf"
 # shellcheck source=../config/pins.conf
 source "$REPO_ROOT/config/pins.conf"
+# shellcheck source=../config/profiles.conf
+source "$REPO_ROOT/config/profiles.conf"
 
 FAILED_ITEMS=()
 WARNED_ITEMS=()

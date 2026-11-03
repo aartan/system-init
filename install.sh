@@ -40,6 +40,7 @@ source "$REPO_ROOT/installers/code.sh"
 INSTALL_DOTFILES=1
 REQUESTED_MODULES=()
 SHOW_LIST=0
+PROFILE=""
 INSTALL_OK=0
 IN_PROGRESS_FILE="$STATE_DIR/install.in-progress"
 
@@ -47,10 +48,12 @@ usage() {
   cat <<'EOF'
 Usage: ./install.sh [OPTIONS]
 
-Install the complete system-init workstation. There are no profiles; every
-module listed in config/modules.conf is installed unless --module is used.
+Install a development workstation. Without --profile or --module, an
+interactive run prompts for the core or extended profile. A non-interactive
+run defaults to core.
 
 Options:
+  --profile NAME     core (development defaults) or extended (all modules).
   --dry-run          Show every action without changing the system.
   --no-dotfiles      Install packages and system configuration only.
   --module NAME      Install NAME and its dependencies. Repeatable.
@@ -58,7 +61,8 @@ Options:
   -h, --help         Show this help.
 
 Examples:
-  ./install.sh --dry-run
+  ./install.sh --profile core --dry-run
+  ./install.sh --profile extended
   ./install.sh --module terminal --module databases
   ./install.sh --no-dotfiles
 EOF
@@ -108,6 +112,17 @@ parse_args() {
           REQUESTED_MODULES+=("$module")
         done
         ;;
+      --profile)
+        if (( $# < 2 )); then
+          log_error "--profile requires a name."
+          exit 2
+        fi
+        shift
+        PROFILE="$1"
+        ;;
+      --profile=*)
+        PROFILE="${argument#--profile=}"
+        ;;
       --list)
         SHOW_LIST=1
         ;;
@@ -123,6 +138,81 @@ parse_args() {
     esac
     shift
   done
+}
+
+validate_profile_args() {
+  if [[ -n "$PROFILE" && ${#REQUESTED_MODULES[@]} -gt 0 ]]; then
+    log_error "Use either --profile or --module, not both."
+    exit 2
+  fi
+
+  if [[ -n "$PROFILE" ]]; then
+    case "$PROFILE" in
+      core|extended) ;;
+      *)
+        log_error "Unknown profile: $PROFILE (expected core or extended)."
+        exit 2
+        ;;
+    esac
+  fi
+}
+
+select_profile() {
+  local choice
+
+  if [[ -n "$PROFILE" ]]; then
+    return 0
+  fi
+  if (( ${#REQUESTED_MODULES[@]} > 0 )); then
+    return 0
+  fi
+  if [[ "$SHOW_LIST" == "1" ]]; then
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    PROFILE=core
+    log_info "No interactive terminal; using the core profile."
+    return 0
+  fi
+
+  printf '\nInstallation profile:\n'
+  printf '  1) Core development\n'
+  printf '  2) Extended workstation (adds browsers, productivity apps, virtualization)\n'
+
+  while true; do
+    printf 'Select [1/2] (default 1): '
+    if ! read -r choice; then
+      printf '\n'
+      PROFILE=core
+      break
+    fi
+    case "$choice" in
+      1|"")
+        PROFILE=core
+        break
+        ;;
+      2)
+        PROFILE=extended
+        break
+        ;;
+      *)
+        printf 'Enter 1 or 2.\n'
+        ;;
+    esac
+  done
+}
+
+apply_profile() {
+  local module
+
+  (( ${#REQUESTED_MODULES[@]} > 0 )) && return 0
+  [[ -z "$PROFILE" ]] && return 0
+
+  while IFS= read -r module; do
+    [[ -z "$module" ]] && continue
+    REQUESTED_MODULES+=("$module")
+  done < <(modules_profile_modules "$PROFILE")
 }
 
 show_summary() {
@@ -196,11 +286,21 @@ main() {
   esac
 
   platform_load || exit 1
+  validate_profile_args
+
+  if [[ "$SHOW_LIST" != "1" ]]; then
+    select_profile
+    if [[ -n "$PROFILE" ]]; then
+      modules_profile_validate "$PROFILE" || exit 2
+      apply_profile
+    fi
+  fi
+
   modules_resolve "${REQUESTED_MODULES[@]}" || exit 2
 
   if [[ "$SHOW_LIST" == "1" ]]; then
     printf 'Platform: %s (%s)\n' "$PLATFORM_NAME" "$PLATFORM_ARCH"
-    printf 'Modules selected by default:\n\n'
+    printf 'Modules:\n\n'
     modules_list
     exit 0
   fi
@@ -218,6 +318,9 @@ main() {
   log_section "system-init installer"
   log_info "Platform: $PLATFORM_NAME ($PLATFORM_ARCH)"
   log_info "Target home: $TARGET_HOME"
+  if [[ -n "$PROFILE" ]]; then
+    log_info "Profile: $PROFILE"
+  fi
   log_info "Modules: ${SELECTED_MODULES[*]}"
 
   validation_preflight || {

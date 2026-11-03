@@ -23,6 +23,77 @@ modules_exists() {
   [[ -f "$REPO_ROOT/modules/$1/module.conf" ]]
 }
 
+module_in_list() {
+  local wanted="$1"
+  local list="$2"
+  local item
+  local -a items=()
+
+  read -r -a items <<<"$list"
+  for item in "${items[@]}"; do
+    [[ -z "$item" ]] && continue
+    [[ "$item" == "$wanted" ]] && return 0
+  done
+  return 1
+}
+
+modules_profile_modules() {
+  local profile="$1"
+  local module
+  local -a items=()
+
+  case "$profile" in
+    core)
+      read -r -a items <<<"${CORE_MODULES:-}"
+      for module in "${items[@]}"; do
+        [[ -z "$module" ]] && continue
+        printf '%s\n' "$module"
+      done
+      ;;
+    extended)
+      modules_all
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+modules_profile_validate() {
+  local profile="$1"
+  local module
+  local failed=0
+  local -a items=()
+
+  case "$profile" in
+    core|extended) ;;
+    *)
+      log_error "Unknown profile: $profile"
+      return 1
+      ;;
+  esac
+
+  read -r -a items <<<"${CORE_MODULES:-}"
+  if (( ${#items[@]} == 0 )); then
+    log_error "The core profile does not list any modules."
+    return 1
+  fi
+
+  for module in "${items[@]}"; do
+    [[ -z "$module" ]] && continue
+    if ! modules_exists "$module"; then
+      log_error "Core profile references unknown module: $module"
+      failed=1
+    fi
+    if module_in_list "$module" "${EXTENDED_ONLY_MODULES:-}"; then
+      log_error "Module '$module' is listed as core and extended-only."
+      failed=1
+    fi
+  done
+
+  return "$failed"
+}
+
 modules_validate_all() {
   local module dep
   local failed=0
@@ -123,6 +194,11 @@ modules_list() {
     printf '%-16s %-8s %s\n' "$module" "$count" "$description"
   done < <(modules_all)
   printf '\nDotfiles managed for the current platform: %s\n' "$(dotfiles_count 2>/dev/null || printf '?')"
+  printf 'Core profile:'
+  while IFS= read -r module; do
+    printf ' %s' "$module"
+  done < <(modules_profile_modules core)
+  printf '\nExtended profile: all modules\n'
 }
 
 modules_run() {
