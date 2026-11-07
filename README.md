@@ -1,106 +1,99 @@
 # system-init
 
-**Reproducible workstation provisioning for development and productivity.**
+Opinionated Fedora workstation provisioning for software development.
 
-`system-init` is a modular workstation bootstrap project for setting up and maintaining a consistent development environment.
+`system-init` installs a development environment, optional desktop productivity
+applications, and a managed set of dotfiles. Existing files are backed up before
+replacement, and every action can be previewed with `--dry-run`.
 
-It automates the installation and configuration of essential development tools, terminal utilities, editors, runtimes, container tooling, databases, productivity applications, and system components.
+**Supported platform:** Fedora Linux 40 or newer
 
-Built around reproducibility, modularity, and safe configuration management, it provides a repeatable way to provision a workstation without manually configuring each component.
+## Requirements
 
-**Current platform support:** Fedora 44 Workstation  
-**Future platform support:** macOS (planned)
-
-## Features
-
-- **Automated provisioning** — Install and configure a complete development workstation.
-- **Modular installation** — Install everything at once or select individual components.
-- **Reproducible configuration** — Pinned dependencies and verified downloads.
-- **Dotfile management** — Centrally manage and deploy user configurations.
-- **Backup and restore** — Protect existing configurations and restore previous states.
-- **Safe execution** — Dry-run support, explicit permissions, and conservative system changes.
-- **System diagnostics** — Health checks and configuration validation.
-- **Maintenance** — Update managed packages, runtimes, and configurations.
-
-## Managed environment
-
-| Category | Components |
-|---|---|
-| Shell & Terminal | Zsh, Oh My Zsh, Powerlevel10k, Alacritty, btop |
-| CLI Tools | eza, fzf, ripgrep, fd, bat, tmux, jq |
-| Development | GCC, C++, CMake, Ninja, mise, Node.js, Python, pnpm, Java |
-| Editors | VS Code, Neovim, ESLint, Prettier |
-| Containers | Podman, Buildah, Skopeo, podman-compose |
-| Databases | PostgreSQL, Valkey, DBeaver, pgAdmin |
-| Browsers | Firefox, Brave, Google Chrome |
-| Productivity | Obsidian, KeePassXC, Proton applications, GitHub Desktop |
-| Virtualization | QEMU/KVM, libvirt, virt-manager |
-| System | keyd, Fedora system integration |
-
-Some desktop applications and components are optional.
-
-Gaming software is intentionally excluded from the project's scope.
-
-See [docs/inventory.md](docs/inventory.md) for the full software inventory.
+- Fedora Workstation
+- An interactive terminal for `sudo`
+- Network access for DNF, Flatpak, and pinned downloads
 
 ## Quick start
 
-\`\`\`bash
+```bash
 git clone <repository-url>
 cd system-init
 
-# List available modules
-./install.sh --list
-
-# Preview installation
+# Preview the installation
 ./install.sh --dry-run
 
-# Install the complete workstation
+# Install (prompts for a profile)
 ./install.sh
-\`\`\`
 
-After installation:
-
-\`\`\`bash
-exec zsh
+# Verify the result
 ./scripts/doctor.sh
-\`\`\`
+```
 
-The installer requests elevated privileges only when required. Downloaded archives are SHA-256 verified, and existing configurations are backed up before replacement.
+## Profiles
 
-## Usage
+An interactive install prompts for one of two profiles:
+
+| Profile | Contents |
+|---|---|
+| `core` | CLI tools, shell, fonts, editors, containers, databases, runtimes |
+| `extended` | Everything in core, plus browsers, productivity apps, and virtualization |
+
+Use a profile directly in non-interactive runs:
+
+```bash
+./install.sh --profile core
+./install.sh --profile extended
+```
+
+A non-interactive run without `--profile` or `--module` defaults to `core`.
+
+Profile membership is defined in `config/profiles.conf`.
+
+## Commands
 
 | Command | Description |
 |---|---|
-| \`./install.sh\` | Install the complete workstation |
-| \`./install.sh --list\` | List available modules |
-| \`./install.sh --dry-run\` | Preview installation |
-| \`./install.sh --no-dotfiles\` | Skip user configuration |
-| \`./install.sh --module NAME\` | Install selected modules |
-| \`./scripts/update.sh\` | Update managed software |
-| \`./scripts/doctor.sh\` | Run system diagnostics |
-| \`./scripts/backup.sh\` | Back up managed configurations |
-| \`./scripts/restore.sh\` | Restore configuration backups |
-| \`./uninstall.sh\` | Remove managed configurations |
+| `./install.sh` | Install and prompt for a profile |
+| `./install.sh --list` | List modules and package counts |
+| `./install.sh --dry-run` | Preview the installation |
+| `./install.sh --module NAME` | Install selected modules |
+| `./install.sh --no-dotfiles` | Skip user configuration |
+| `./scripts/update.sh` | Update packages and runtimes |
+| `./scripts/doctor.sh` | Run read-only diagnostics |
+| `./scripts/backup.sh` | Back up managed dotfiles |
+| `./scripts/restore.sh` | Restore a backup |
+| `./uninstall.sh` | Remove managed links |
 
-## Platform support
+## Customization
 
-| Platform | Status |
-|---|---|
-| Fedora 44 Workstation | Supported |
-| macOS | Planned |
+- Add or remove packages in `modules/<name>/packages.fedora`.
+- Add modules to `config/modules.conf` and choose profile membership in
+  `config/profiles.conf`.
+- Change pinned versions in `config/pins.conf` and `config/runtimes.conf`.
+- Manage user files through `dotfiles/manifest.tsv`.
 
-Fedora is the only supported platform in the current release. macOS support is planned but not yet enabled.
+See [adding applications](docs/adding-applications.md) and
+[troubleshooting](docs/troubleshooting.md).
 
-## Documentation
+## After installation
 
-- [Architecture](docs/architecture.md)
-- [Dotfiles](docs/dotfiles.md)
-- [Adding applications](docs/adding-applications.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Software inventory](docs/inventory.md)
-- [Security](docs/security.md)
-- [Fedora validation](docs/fedora-testing.md)
+```bash
+exec zsh
+./scripts/doctor.sh
+```
+
+Log out and back in if the login shell, fonts, or session environment do not
+update in existing terminals.
+
+## Safety
+
+- `--dry-run` prints every mutating command without running it.
+- Existing dotfiles are backed up to
+  `${XDG_STATE_HOME:-$HOME/.local/state}/system-init/backups/`.
+- Downloads are verified against pinned SHA-256 checksums.
+- No credentials, keys, shell history, or browser profiles are stored in the
+  repository.
 
 ## License
 
