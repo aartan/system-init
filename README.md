@@ -73,7 +73,7 @@ Profile membership is defined in `config/profiles.conf`.
 - Change pinned versions in `config/pins.conf` and `config/runtimes.conf`.
 - Manage user files through `dotfiles/manifest.tsv`.
 
-See [adding applications](docs/adding-applications.md) and
+See [customization](docs/customization.md) and
 [troubleshooting](docs/troubleshooting.md).
 
 ## After installation
