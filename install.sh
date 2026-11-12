@@ -215,6 +215,31 @@ apply_profile() {
   done < <(modules_profile_modules "$PROFILE")
 }
 
+prompt_restart() {
+  local answer
+
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  [[ -t 0 ]] || return 0
+
+  printf '\n'
+  log_info "A restart is recommended to apply shell, session, and service changes."
+  printf 'Restart now? [y/N] '
+  if ! read -r answer; then
+    printf '\n'
+    return 0
+  fi
+
+  case "$answer" in
+    [yY]|[yY][eE][sS])
+      log_info "Restarting..."
+      run_sudo systemctl reboot || log_warn "Could not restart automatically; restart manually."
+      ;;
+    *)
+      printf 'Log out and back in, then run ./scripts/doctor.sh to verify the setup.\n'
+      ;;
+  esac
+}
+
 show_summary() {
   local item
 
@@ -400,9 +425,10 @@ main() {
   else
     log_success "system-init installation complete."
     printf 'Next steps:\n'
-    printf '  1. Open a new terminal (or run: exec zsh).\n'
+    printf '  1. Restart or log out and back in to apply the new login shell.\n'
     printf '  2. Verify the workstation with: ./scripts/doctor.sh\n'
     printf '  3. Review backups at: %s\n' "$BACKUP_DIR"
+    prompt_restart
   fi
 }
 

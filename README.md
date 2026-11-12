@@ -78,6 +78,9 @@ See [customization](docs/customization.md) and
 
 ## After installation
 
+The installer offers to restart at the end of an interactive run. If you decline,
+log out and back in instead:
+
 ```bash
 exec zsh
 ./scripts/doctor.sh
