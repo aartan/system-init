@@ -89,6 +89,13 @@ exec zsh
 Log out and back in if the login shell, fonts, or session environment do not
 update in existing terminals.
 
+The managed `.gitconfig` contains only Git LFS settings. Set your own identity:
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
 ## Safety
 
 - `--dry-run` prints every mutating command without running it.
