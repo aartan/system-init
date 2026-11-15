@@ -42,6 +42,9 @@ REQUESTED_MODULES=()
 SHOW_LIST=0
 PROFILE=""
 INSTALL_OK=0
+GIT_IDENTITY_NAME=""
+GIT_IDENTITY_EMAIL=""
+GIT_LOCAL_CONFIG="$TARGET_HOME/.gitconfig.local"
 IN_PROGRESS_FILE="$STATE_DIR/install.in-progress"
 
 usage() {
@@ -215,6 +218,115 @@ apply_profile() {
   done < <(modules_profile_modules "$PROFILE")
 }
 
+git_identity_current() {
+  local key="$1"
+  local value=""
+
+  if [[ -f "$GIT_LOCAL_CONFIG" ]]; then
+    value="$(git config --file "$GIT_LOCAL_CONFIG" --get "$key" 2>/dev/null || true)"
+  fi
+  if [[ -z "$value" ]]; then
+    value="$(HOME="$TARGET_HOME" git config --global --includes --get "$key" 2>/dev/null || true)"
+  fi
+  printf '%s\n' "$value"
+}
+
+prompt_git_identity() {
+  local name email input
+
+  [[ "$INSTALL_DOTFILES" == "1" ]] || return 0
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  dotfiles_target_selected ".gitconfig" || return 0
+
+  name="${DEV_SETUP_GIT_NAME:-$(git_identity_current user.name)}"
+  email="${DEV_SETUP_GIT_EMAIL:-$(git_identity_current user.email)}"
+
+  if [[ ! -t 0 ]]; then
+    if [[ -n "$name" && -n "$email" ]]; then
+      GIT_IDENTITY_NAME="$name"
+      GIT_IDENTITY_EMAIL="$email"
+      log_info "Using the configured Git identity for $name <$email>."
+    else
+      log_info "No interactive terminal; skipping the Git identity prompt."
+    fi
+    return 0
+  fi
+
+  printf '\nGit identity (used for commits):\n'
+
+  printf '  Name'
+  [[ -n "$name" ]] && printf ' [%s]' "$name"
+  printf ': '
+  if ! read -r input; then
+    printf '\n'
+    return 0
+  fi
+  [[ -n "$input" ]] && name="$input"
+
+  printf '  Email'
+  [[ -n "$email" ]] && printf ' [%s]' "$email"
+  printf ': '
+  if ! read -r input; then
+    printf '\n'
+    return 0
+  fi
+  [[ -n "$input" ]] && email="$input"
+
+  if [[ -z "$name" || -z "$email" ]]; then
+    log_warn "Git identity not set; configure it later in ~/.gitconfig.local."
+    return 0
+  fi
+
+  GIT_IDENTITY_NAME="$name"
+  GIT_IDENTITY_EMAIL="$email"
+}
+
+git_identity_apply() {
+  local name="$GIT_IDENTITY_NAME"
+  local email="$GIT_IDENTITY_EMAIL"
+  local current_name current_email written_name written_email
+
+  [[ "$INSTALL_DOTFILES" == "1" ]] || return 0
+  [[ -n "$name" && -n "$email" ]] || return 0
+  dotfiles_target_selected ".gitconfig" || return 0
+
+  current_name="$(git config --file "$GIT_LOCAL_CONFIG" --get user.name 2>/dev/null || true)"
+  current_email="$(git config --file "$GIT_LOCAL_CONFIG" --get user.email 2>/dev/null || true)"
+  if [[ "$current_name" == "$name" && "$current_email" == "$email" ]]; then
+    log_debug "Git identity already configured."
+    return 0
+  fi
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    log_dry "write Git identity to $(log_cmd "$GIT_LOCAL_CONFIG")"
+    return 0
+  fi
+
+  if [[ -e "$GIT_LOCAL_CONFIG" ]]; then
+    backup_path "$GIT_LOCAL_CONFIG" "git-identity" || return 1
+  fi
+
+  mkdir -p -- "$(dirname -- "$GIT_LOCAL_CONFIG")" || return 1
+  if ! git config --file "$GIT_LOCAL_CONFIG" --replace-all user.name "$name"; then
+    record_failure "Failed to write Git user.name."
+    return 1
+  fi
+  if ! git config --file "$GIT_LOCAL_CONFIG" --replace-all user.email "$email"; then
+    record_failure "Failed to write Git user.email."
+    return 1
+  fi
+  chmod 600 -- "$GIT_LOCAL_CONFIG" || return 1
+
+  written_name="$(git config --file "$GIT_LOCAL_CONFIG" --get user.name 2>/dev/null || true)"
+  written_email="$(git config --file "$GIT_LOCAL_CONFIG" --get user.email 2>/dev/null || true)"
+  if [[ "$written_name" != "$name" || "$written_email" != "$email" ]]; then
+    record_failure "Git identity verification failed."
+    return 1
+  fi
+
+  log_success "Configured Git identity for $name <$email>."
+}
+
 prompt_restart() {
   local answer
 
@@ -330,6 +442,8 @@ main() {
     exit 0
   fi
 
+  prompt_git_identity
+
   trap 'on_error $LINENO' ERR
   trap 'on_exit' EXIT
 
@@ -398,6 +512,9 @@ main() {
   else
     log_info "Skipping dotfiles (--no-dotfiles)."
   fi
+
+  CURRENT_MODULE="dotfiles"
+  git_identity_apply || record_failure "Git identity setup failed."
 
   CURRENT_MODULE="platform"
   log_section "Platform post-install"

@@ -73,6 +73,20 @@ To add a file:
 Existing targets are backed up before replacement. A second install creates no
 new backups when nothing changed.
 
+## Git identity
+
+An interactive install prompts for a Git name and email and stores them in
+`~/.gitconfig.local`. The managed `.gitconfig` includes that file, so the
+values stay outside the repository.
+
+For non-interactive installs:
+
+```bash
+DEV_SETUP_GIT_NAME="Your Name" \
+DEV_SETUP_GIT_EMAIL="you@example.com" \
+./install.sh --profile core
+```
+
 ## Pins and runtimes
 
 - `config/pins.conf`: archive URLs, SHA-256 checksums, and Git commits.

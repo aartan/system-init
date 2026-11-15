@@ -23,7 +23,7 @@ cd system-init
 # Preview the installation
 ./install.sh --dry-run
 
-# Install (prompts for a profile)
+# Install (prompts for a profile and Git identity)
 ./install.sh
 
 # Verify the result
@@ -89,11 +89,14 @@ exec zsh
 Log out and back in if the login shell, fonts, or session environment do not
 update in existing terminals.
 
-The managed `.gitconfig` contains only Git LFS settings. Set your own identity:
+The installer prompts for a Git name and email and writes them to
+`~/.gitconfig.local`, which the managed `.gitconfig` includes. For
+non-interactive installs, set `DEV_SETUP_GIT_NAME` and `DEV_SETUP_GIT_EMAIL`.
+If you skip the prompt, configure them later:
 
 ```bash
-git config --global user.name "Your Name"
-git config --global user.email "you@example.com"
+git config --file ~/.gitconfig.local user.name "Your Name"
+git config --file ~/.gitconfig.local user.email "you@example.com"
 ```
 
 ## Safety

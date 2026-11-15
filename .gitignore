@@ -9,6 +9,7 @@ backups/
 # Shell history and credentials
 .zsh_history
 .bash_history
+.gitconfig.local
 .ssh/
 .gnupg/
 .claude/

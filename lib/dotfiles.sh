@@ -316,3 +316,15 @@ dotfiles_count() {
   entries="$(dotfiles_entries 2>/dev/null)" || return 1
   printf '%s\n' "$(grep -c . <<<"$entries" || true)"
 }
+
+dotfiles_target_selected() {
+  local wanted="$1"
+  local module strategy source_rel target_rel
+  local entries
+
+  entries="$(dotfiles_entries)" || return 1
+  while IFS=$'\t' read -r module strategy source_rel target_rel; do
+    [[ "$target_rel" == "$wanted" ]] && return 0
+  done <<<"$entries"
+  return 1
+}
