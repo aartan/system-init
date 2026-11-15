@@ -2,6 +2,17 @@
 # system-init installer
 set -Eeuo pipefail
 
+# Refuse root before sourcing anything from the repository. Sudo is requested
+# only for individual privileged commands after validation.
+if (( EUID == 0 )); then
+  printf 'system-init: refusing to run as root. Run this as your normal user; sudo is requested only when needed.\n' >&2
+  exit 1
+fi
+
+# Resolve privileged commands only from trusted system directories.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export REPO_ROOT
 
@@ -21,6 +32,8 @@ source "$REPO_ROOT/lib/packages.sh"
 source "$REPO_ROOT/lib/modules.sh"
 # shellcheck source=lib/validation.sh
 source "$REPO_ROOT/lib/validation.sh"
+# shellcheck source=lib/git_identity.sh
+source "$REPO_ROOT/lib/git_identity.sh"
 
 # shellcheck source=installers/dnf.sh
 source "$REPO_ROOT/installers/dnf.sh"
@@ -39,6 +52,7 @@ source "$REPO_ROOT/installers/code.sh"
 
 INSTALL_DOTFILES=1
 REQUESTED_MODULES=()
+MODULE_OPTION_GIVEN=0
 SHOW_LIST=0
 PROFILE=""
 INSTALL_OK=0
@@ -85,6 +99,7 @@ parse_args() {
         INSTALL_DOTFILES=0
         ;;
       --module)
+        MODULE_OPTION_GIVEN=1
         if (( $# < 2 )); then
           log_error "--module requires a module name."
           exit 2
@@ -103,6 +118,7 @@ parse_args() {
         done
         ;;
       --module=*)
+        MODULE_OPTION_GIVEN=1
         modules=()
         IFS=',' read -r -a modules <<<"${argument#--module=}"
         if (( ${#modules[@]} == 0 )); then
@@ -144,6 +160,11 @@ parse_args() {
 }
 
 validate_profile_args() {
+  if (( MODULE_OPTION_GIVEN == 1 )) && (( ${#REQUESTED_MODULES[@]} == 0 )); then
+    log_error "--module was provided but contains no valid module names."
+    exit 2
+  fi
+
   if [[ -n "$PROFILE" && ${#REQUESTED_MODULES[@]} -gt 0 ]]; then
     log_error "Use either --profile or --module, not both."
     exit 2
@@ -223,10 +244,10 @@ git_identity_current() {
   local value=""
 
   if [[ -f "$GIT_LOCAL_CONFIG" ]]; then
-    value="$(git config --file "$GIT_LOCAL_CONFIG" --get "$key" 2>/dev/null || true)"
+    value="$(git_identity_config --file "$GIT_LOCAL_CONFIG" --get "$key" 2>/dev/null || true)"
   fi
   if [[ -z "$value" ]]; then
-    value="$(HOME="$TARGET_HOME" git config --global --includes --get "$key" 2>/dev/null || true)"
+    value="$(HOME="$TARGET_HOME" git_identity_config --global --includes --get "$key" 2>/dev/null || true)"
   fi
   printf '%s\n' "$value"
 }
@@ -284,14 +305,18 @@ prompt_git_identity() {
 git_identity_apply() {
   local name="$GIT_IDENTITY_NAME"
   local email="$GIT_IDENTITY_EMAIL"
-  local current_name current_email written_name written_email
+  local current_name current_email
 
   [[ "$INSTALL_DOTFILES" == "1" ]] || return 0
   [[ -n "$name" && -n "$email" ]] || return 0
   dotfiles_target_selected ".gitconfig" || return 0
+  if [[ -L "$GIT_LOCAL_CONFIG" ]]; then
+    record_failure "Refusing to write Git identity through a symlink: $GIT_LOCAL_CONFIG"
+    return 1
+  fi
 
-  current_name="$(git config --file "$GIT_LOCAL_CONFIG" --get user.name 2>/dev/null || true)"
-  current_email="$(git config --file "$GIT_LOCAL_CONFIG" --get user.email 2>/dev/null || true)"
+  current_name="$(git_identity_config --file "$GIT_LOCAL_CONFIG" --get user.name 2>/dev/null || true)"
+  current_email="$(git_identity_config --file "$GIT_LOCAL_CONFIG" --get user.email 2>/dev/null || true)"
   if [[ "$current_name" == "$name" && "$current_email" == "$email" ]]; then
     log_debug "Git identity already configured."
     return 0
@@ -304,23 +329,17 @@ git_identity_apply() {
 
   if [[ -e "$GIT_LOCAL_CONFIG" ]]; then
     backup_path "$GIT_LOCAL_CONFIG" "git-identity" || return 1
+    if [[ -n "${BACKUP_RUN_DIR:-}" && "${BACKUP_SNAPSHOT_COMPLETE:-0}" != "1" ]]; then
+      backup_finalize || {
+        record_failure "Could not finalize backup for the Git identity file."
+        return 1
+      }
+    fi
   fi
 
   mkdir -p -- "$(dirname -- "$GIT_LOCAL_CONFIG")" || return 1
-  if ! git config --file "$GIT_LOCAL_CONFIG" --replace-all user.name "$name"; then
-    record_failure "Failed to write Git user.name."
-    return 1
-  fi
-  if ! git config --file "$GIT_LOCAL_CONFIG" --replace-all user.email "$email"; then
-    record_failure "Failed to write Git user.email."
-    return 1
-  fi
-  chmod 600 -- "$GIT_LOCAL_CONFIG" || return 1
-
-  written_name="$(git config --file "$GIT_LOCAL_CONFIG" --get user.name 2>/dev/null || true)"
-  written_email="$(git config --file "$GIT_LOCAL_CONFIG" --get user.email 2>/dev/null || true)"
-  if [[ "$written_name" != "$name" || "$written_email" != "$email" ]]; then
-    record_failure "Git identity verification failed."
+  if ! git_identity_write_atomic "$GIT_LOCAL_CONFIG" "$name" "$email"; then
+    record_failure "Failed to write the Git identity atomically."
     return 1
   fi
 
@@ -398,6 +417,7 @@ on_exit() {
   local status=$?
   trap - EXIT
   cleanup_tmp
+  state_lock_release
   if [[ "$INSTALL_OK" != "1" && -f "$IN_PROGRESS_FILE" ]]; then
     log_warn "Installation did not finish cleanly. The in-progress marker remains at:"
     log_warn "  $IN_PROGRESS_FILE"
@@ -452,6 +472,13 @@ main() {
   fi
 
   init_state_dirs
+  if [[ "$DRY_RUN" != "1" ]]; then
+    state_lock_acquire "operation" || {
+      record_failure "Another system-init operation is already running."
+      show_summary
+      exit 1
+    }
+  fi
   logging_init
 
   log_section "system-init installer"
@@ -474,9 +501,12 @@ main() {
   }
 
   if [[ "$DRY_RUN" != "1" ]]; then
-    printf 'started=%s\npid=%s\nmodules=%s\n' \
-      "$(now_timestamp)" "$$" "${SELECTED_MODULES[*]}" >"$IN_PROGRESS_FILE"
-    chmod 600 "$IN_PROGRESS_FILE"
+    if ! printf 'started=%s\npid=%s\nmodules=%s\n' \
+      "$(now_timestamp)" "$$" "${SELECTED_MODULES[*]}" | write_private_file "$IN_PROGRESS_FILE"; then
+      record_failure "Could not create the install-in-progress marker safely."
+      show_summary
+      exit 1
+    fi
   fi
 
   CURRENT_MODULE="backup"
@@ -520,7 +550,14 @@ main() {
   log_section "Platform post-install"
   platform_post_install || record_failure "Platform post-install checks failed."
 
-  prune_backups
+  if (( ${#FAILED_ITEMS[@]} == 0 )) && [[ -n "${BACKUP_RUN_DIR:-}" ]] \
+    && [[ "${BACKUP_SNAPSHOT_COMPLETE:-0}" == "1" ]]; then
+    if ! prune_backups; then
+      record_failure "Backup pruning failed."
+    fi
+  else
+    log_info "Skipping backup pruning; no complete non-empty backup was created in this run."
+  fi
 
   show_summary
 

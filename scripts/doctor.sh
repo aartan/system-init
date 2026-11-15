@@ -2,6 +2,14 @@
 # Read-only workstation health check.
 set -Eeuo pipefail
 
+if (( EUID == 0 )); then
+  printf 'system-init: refusing to run as root. Run this as your normal user; sudo is requested only when needed.\n' >&2
+  exit 1
+fi
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 export REPO_ROOT
 
@@ -67,10 +75,10 @@ log_info "Target home: $TARGET_HOME"
 
 platform_validate || true
 
-if sudo -n true >/dev/null 2>&1; then
+if sudo_binary_valid && "$SUDO_BIN" -n true >/dev/null 2>&1; then
   ok "Passwordless sudo is available."
 else
-  warn "sudo requires a password; package operations must be run interactively."
+  warn "sudo requires a password or $SUDO_BIN is unavailable; package operations must be run interactively."
 fi
 
 # ---------------------------------------------------------------------------
@@ -96,7 +104,7 @@ while IFS= read -r module; do
         rpm -q --whatprovides -- "$package" >/dev/null 2>&1 && present=0
         ;;
       flatpak)
-        flatpak info -- "$package" >/dev/null 2>&1 && present=0
+        flatpak info --system -- "$package" >/dev/null 2>&1 && present=0
         ;;
       *)
         present=1
@@ -139,42 +147,71 @@ log_section "Shell"
 if have_command zsh; then
   ok "zsh is installed: $(zsh --version)"
 
-  login_shell="$(getent passwd "$TARGET_USER" | awk -F: '{ print $7 }')"
-  zsh_path="$(command -v zsh)"
-  if [[ "$login_shell" == "$zsh_path" ]]; then
-    ok "Login shell for $TARGET_USER is $zsh_path."
+  if ! target_user_is_valid "$TARGET_USER"; then
+    fail "Invalid target user name: ${TARGET_USER:-<empty>}"
   else
-    fail "Login shell for $TARGET_USER is ${login_shell:-unknown}, expected $zsh_path."
+    login_shell="$(getent -- passwd "$TARGET_USER" | awk -F: '{ print $7 }')"
+    zsh_path="$(command -v zsh)"
+    if [[ "$login_shell" == "$zsh_path" ]]; then
+      ok "Login shell for $TARGET_USER is $zsh_path."
+    else
+      fail "Login shell for $TARGET_USER is ${login_shell:-unknown}, expected $zsh_path."
+    fi
   fi
 else
   fail "zsh is not installed."
 fi
 
+# Read-only Git inspection through the shared safe wrapper.
+doctor_git() {
+  git_safe "$@"
+}
+
 check_checkout() {
   local path="$1"
   local expected="$2"
   local name="$3"
-  local actual
-  if [[ ! -d "$path/.git" ]]; then
-    fail "$name is not installed at $path"
+  local actual status
+  if [[ ! -d "$path/.git" || -L "$path" || -L "$path/.git" ]]; then
+    fail "$name is not installed at $path (missing checkout or symlinked path)"
     return
   fi
-  actual="$(git -C "$path" rev-parse HEAD 2>/dev/null || true)"
-  if [[ "$actual" == "$expected" ]]; then
-    ok "$name is at the pinned commit ${expected:0:7}."
-  else
-    warn "$name is at ${actual:0:7}, not the pinned ${expected:0:7}."
+  if ! git_checkout_owned_by_user "$path"; then
+    fail "$name at $path is not owned by the current user."
+    return
   fi
+  actual="$(doctor_git -C "$path" rev-parse HEAD 2>/dev/null || true)"
+  if [[ "$actual" != "$expected" ]]; then
+    fail "$name is at ${actual:0:7}, not the pinned ${expected:0:7}."
+    return
+  fi
+  if ! status="$(doctor_git -C "$path" status --porcelain --untracked-files=normal 2>/dev/null)"; then
+    fail "Could not inspect the working tree for $name at $path."
+    return
+  fi
+  if [[ -n "$status" ]]; then
+    fail "$name has local modifications at $path."
+    return
+  fi
+  ok "$name is at the pinned commit ${expected:0:7} with a clean working tree."
 }
 
 check_checkout "$TARGET_HOME/.oh-my-zsh" "$OH_MY_ZSH_COMMIT" "Oh My Zsh"
 check_checkout "$TARGET_HOME/.oh-my-zsh/custom/themes/powerlevel10k" "$P10K_COMMIT" "Powerlevel10k"
 check_checkout "$TARGET_HOME/.oh-my-zsh/custom/plugins/history-substring-search" "$HISTORY_SUBSTRING_COMMIT" "history-substring-search"
 
-if HOME="$TARGET_HOME" zsh -lic 'exit' >/dev/null 2>&1; then
-  ok "Interactive login shell starts successfully."
-else
-  fail "zsh -lic failed to start cleanly."
+# Parse managed startup files without executing user code. Doctor must remain
+# read-only and must never source arbitrary shell startup content.
+startup_ok=1
+for startup_file in "$TARGET_HOME/.zshrc" "$TARGET_HOME/.p10k.zsh"; do
+  [[ -f "$startup_file" ]] || continue
+  if ! zsh -n "$startup_file" >/dev/null 2>&1; then
+    fail "Shell syntax error in $startup_file."
+    startup_ok=0
+  fi
+done
+if (( startup_ok == 1 )); then
+  ok "Managed zsh startup files parse successfully."
 fi
 
 # ---------------------------------------------------------------------------
@@ -183,7 +220,7 @@ fi
 log_section "Runtimes"
 if [[ -x "$MISE_BIN" ]]; then
   ok "mise is installed: $(mise_installed_version)"
-  mise_verify_runtimes || true
+  mise_verify_runtimes_readonly || true
 else
   fail "mise is not installed at $MISE_BIN"
 fi
@@ -276,10 +313,10 @@ fi
 # ---------------------------------------------------------------------------
 log_section "Flatpak and backups"
 if packages_selected_managers | grep -Fxq flatpak; then
-  if flatpak remotes --system 2>/dev/null | awk '{ print $1 }' | grep -Fxq "$FLATPAK_REMOTE"; then
-    ok "Flatpak remote '$FLATPAK_REMOTE' is configured."
+  if flatpak_remote_url_matches "$FLATPAK_REMOTE" "$FLATPAK_REPO_URL"; then
+    ok "Flatpak remote '$FLATPAK_REMOTE' is configured with the expected URL."
   else
-    fail "Flatpak remote '$FLATPAK_REMOTE' is missing."
+    fail "Flatpak remote '$FLATPAK_REMOTE' is missing or has an unexpected URL."
   fi
 fi
 
@@ -302,8 +339,8 @@ log_section "Repository secret scan"
 secret_pattern='-----BEGIN [A-Z ]*PRIVATE KEY-----|postgres(ql)?://[^[:space:]]+:[^[:space:]@]+@|(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9]{32,}|xox[baprs]-[A-Za-z0-9-]{10,}'
 secret_hits=""
 
-if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  secret_hits="$(git -C "$REPO_ROOT" grep -IlE -e "$secret_pattern" -- . 2>/dev/null || true)"
+if doctor_git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  secret_hits="$(doctor_git -C "$REPO_ROOT" grep -IlE -e "$secret_pattern" -- . 2>/dev/null || true)"
 else
   secret_hits="$(grep -rIlE --exclude-dir=.git -e "$secret_pattern" "$REPO_ROOT" 2>/dev/null || true)"
 fi

@@ -88,6 +88,11 @@ packages_install_module() {
       continue
     fi
 
+    if ! package_name_is_valid "$package"; then
+      record_failure "Refusing invalid package name '$package' in $file."
+      continue
+    fi
+
     case "$manager" in
       dnf)
         if ! packages_array_contains "$package" "${dnf_required[@]}" "${dnf_optional[@]}"; then

@@ -21,13 +21,19 @@ validation_environment() {
     failed=1
   fi
 
-  if [[ ! -d "$TARGET_HOME" ]]; then
+  if [[ -z "$TARGET_HOME" || "$TARGET_HOME" != /* || "$TARGET_HOME" == "/" ]]; then
+    record_failure "Target home directory is not a safe absolute path: ${TARGET_HOME:-<empty>}"
+    failed=1
+  elif [[ ! -d "$TARGET_HOME" ]]; then
     record_failure "Target home directory does not exist: $TARGET_HOME"
+    failed=1
+  elif [[ ! -w "$TARGET_HOME" && "$DRY_RUN" != "1" ]]; then
+    record_failure "Target home directory is not writable: $TARGET_HOME"
     failed=1
   fi
 
-  if [[ ! -w "$TARGET_HOME" && "$DRY_RUN" != "1" ]]; then
-    record_failure "Target home directory is not writable: $TARGET_HOME"
+  if ! target_user_is_valid "$TARGET_USER"; then
+    record_failure "Invalid target user name: ${TARGET_USER:-<empty>}"
     failed=1
   fi
 
@@ -36,6 +42,7 @@ validation_environment() {
     config/pins.conf
     config/runtimes.conf
     config/modules.conf
+    config/profiles.conf
     dotfiles/manifest.tsv
     lib/common.sh
     lib/logging.sh
@@ -44,6 +51,7 @@ validation_environment() {
     lib/modules.sh
     lib/backups.sh
     lib/dotfiles.sh
+    lib/git_identity.sh
   )
   local item
   for item in "${required[@]}"; do
@@ -59,12 +67,16 @@ validation_environment() {
 validation_required_commands() {
   # git is intentionally not required here: the core module installs it before
   # the shell-framework and LFS steps that need it.
-  local -a commands=(curl tar sha256sum awk sed grep find realpath install)
+  local -a commands=(curl tar sha256sum awk sed grep find realpath install mktemp findmnt)
   local command
   local failed=0
 
   if [[ "$PLATFORM" == "fedora" ]]; then
-    commands+=(dnf rpm sudo systemctl)
+    commands+=(dnf rpm systemctl)
+    if ! sudo_binary_valid; then
+      record_failure "sudo is required at $SUDO_BIN (absolute, executable, non-symlink)."
+      failed=1
+    fi
   fi
 
   for command in "${commands[@]}"; do
@@ -98,6 +110,12 @@ validation_package_manifests() {
 
       if [[ -n "${optional:-}" && "$optional" != "optional" ]]; then
         record_failure "Unknown package flag '$optional' in $file: $line"
+        failed=1
+        continue
+      fi
+
+      if ! package_name_is_valid "$package"; then
+        record_failure "Invalid package name '$package' in $file."
         failed=1
         continue
       fi
@@ -163,9 +181,24 @@ validation_secret_paths() {
   done
 
   if find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o \
-    -type f \( -name "*.pem" -o -name "*.key" -o -name "id_rsa" -o -name "id_ed25519" \) -print \
+    \( -type d \( -name ".ssh" -o -name ".gnupg" \) -print \) | grep -q .; then
+    record_failure "Repository contains a forbidden nested SSH/GnuPG directory."
+    failed=1
+  fi
+
+  if find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o \
+    -type f \( -name "*.pem" -o -name "*.key" -o -name "*.p12" -o -name "*.pfx" \
+      -o -name "*.jks" -o -name "*.ppk" -o -name "secring.gpg" \
+      -o -name "id_rsa" -o -name "id_ecdsa" -o -name "id_ed25519" \
+      -o -name "id_ed25519_sk" \) -print \
     | grep -q .; then
     record_failure "Repository contains private key material."
+    failed=1
+  fi
+
+  if grep -RIlE --exclude-dir=.git --exclude-dir=tests \
+    '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' "$REPO_ROOT" 2>/dev/null | grep -q .; then
+    record_failure "Repository contains a private-key block."
     failed=1
   fi
 

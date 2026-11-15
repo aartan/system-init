@@ -2,6 +2,14 @@
 # Update Fedora packages, Flatpak apps, and mise-managed runtimes.
 set -Eeuo pipefail
 
+if (( EUID == 0 )); then
+  printf 'system-init: refusing to run as root. Run this as your normal user; sudo is requested only when needed.\n' >&2
+  exit 1
+fi
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 export REPO_ROOT
 
@@ -17,6 +25,7 @@ source "$REPO_ROOT/lib/packages.sh"
 source "$REPO_ROOT/lib/modules.sh"
 # shellcheck source=../lib/backups.sh
 source "$REPO_ROOT/lib/backups.sh"
+trap 'state_lock_release' EXIT
 # shellcheck source=installers/dnf.sh
 source "$REPO_ROOT/installers/dnf.sh"
 # shellcheck source=installers/flatpak.sh
@@ -77,6 +86,7 @@ platform_load || exit 1
 modules_resolve || exit 2
 
 init_state_dirs
+[[ "$DRY_RUN" == "1" ]] || state_lock_acquire "operation" || exit 1
 logging_init
 
 log_section "system-init update"
@@ -101,10 +111,12 @@ else
 fi
 
 if [[ "$SKIP_REPO" != "1" ]]; then
-  if git -C "$REPO_ROOT" remote get-url origin >/dev/null 2>&1; then
+  if ! git_checkout_owned_by_user "$REPO_ROOT"; then
+    record_failure "Refusing to update a checkout whose .git or directory is not a user-owned real directory."
+  elif git_safe -C "$REPO_ROOT" remote get-url origin >/dev/null 2>&1; then
     if [[ "$DRY_RUN" == "1" ]]; then
-      log_dry "git -C $(log_cmd "$REPO_ROOT") pull --ff-only"
-    elif git -C "$REPO_ROOT" pull --ff-only; then
+      log_dry "git_safe -C $(log_cmd "$REPO_ROOT") pull --ff-only"
+    elif git_safe -C "$REPO_ROOT" pull --ff-only; then
       log_success "Updated the system-init Git checkout."
     else
       record_failure "Could not fast-forward the system-init Git checkout."
@@ -125,5 +137,6 @@ if (( ${#FAILED_ITEMS[@]} > 0 )); then
   exit 1
 fi
 
+state_lock_release
 log_success "Update complete."
 printf 'Run ./scripts/doctor.sh to verify the workstation.\n'

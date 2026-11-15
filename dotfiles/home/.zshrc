@@ -64,7 +64,6 @@ alias ll='eza -lah --icons --git'
 alias n='ninja'
 alias c='clear'
 alias please='sudo'
-alias tb='nc termbin.com 9999'
 
 # Parallel builds
 alias make='make -j$(nproc)'

@@ -27,7 +27,7 @@ Common causes:
 - A package manifest row has the wrong number of fields or an unknown flag.
 - A dotfile source is missing or resolves outside the repository.
 - The repository contains a forbidden sensitive path.
-- The Fedora release is older than 40 or the architecture is unsupported.
+- The Fedora release is older than 43 or the architecture is unsupported.
 
 ## DNF repository errors
 
@@ -68,6 +68,31 @@ Restore the original:
 ./scripts/restore.sh --list
 ./scripts/restore.sh --latest
 ```
+
+`--list` shows `signed`, `unsigned-v2`, `invalid-payload`, `invalid-v2`,
+`invalid-signature`, `empty-v2`, `legacy-unverified`, or `legacy-empty`. `signed` means the
+signature and every payload hash verified. Legacy v1 snapshots require
+`--allow-legacy`; unsigned v2 snapshots require `--allow-unsigned`. Neither flag
+bypasses an invalid v2 signature, revoked/expired signer, or payload hash.
+Empty snapshots are refused.
+
+If a restore is interrupted or reports a retained journal:
+
+```bash
+ls -la "${XDG_STATE_HOME:-$HOME/.local/state}/system-init/journal/"
+./scripts/restore.sh --recover-journal PATH
+```
+
+Each staging directory is named `.system-init-restore.*` under the affected
+destination's parent. `stage/old` holds the previous regular file. Recovery only
+moves `old` back when the destination is missing; if the destination exists, or
+the state is unresolved/failed, the staging directory and journal are left in
+place for manual inspection and the command exits nonzero. Journals are
+accepted only from the canonical state journal directory, with current-user
+ownership and restrictive permissions; traversal, symlinked journals/staging
+directories, directory `stage/old` payloads, symlink `stage/old` payloads, and
+destinations outside the managed allowlist are refused. Never delete a staging
+directory before checking its `old` file.
 
 ## New terminals still use bash
 
