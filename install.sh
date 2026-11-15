@@ -70,7 +70,8 @@ interactive run prompts for the core or extended profile. A non-interactive
 run defaults to core.
 
 Options:
-  --profile NAME     core (development defaults) or extended (all modules).
+  --profile NAME     core (development defaults) or extended (all modules and
+                     optional desktop applications).
   --dry-run          Show every action without changing the system.
   --no-dotfiles      Install packages and system configuration only.
   --module NAME      Install NAME and its dependencies. Repeatable.
@@ -201,8 +202,8 @@ select_profile() {
   fi
 
   printf '\nInstallation profile:\n'
-  printf '  1) Core development\n'
-  printf '  2) Extended workstation (adds browsers, productivity apps, virtualization)\n'
+  printf '  1) Core development (required packages only)\n'
+  printf '  2) Extended workstation (all modules, including optional desktop apps)\n'
 
   while true; do
     printf 'Select [1/2] (default 1): '
@@ -486,6 +487,11 @@ main() {
   log_info "Target home: $TARGET_HOME"
   if [[ -n "$PROFILE" ]]; then
     log_info "Profile: $PROFILE"
+    if packages_optional_apps_enabled; then
+      log_info "Optional desktop applications: enabled."
+    else
+      log_info "Optional desktop applications: disabled."
+    fi
   fi
   log_info "Modules: ${SELECTED_MODULES[*]}"
 

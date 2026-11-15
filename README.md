@@ -36,8 +36,8 @@ An interactive install prompts for one of two profiles:
 
 | Profile | Contents |
 |---|---|
-| `core` | CLI tools, shell, fonts, editors, containers, databases, runtimes |
-| `extended` | Everything in core, plus browsers, productivity apps, and virtualization |
+| `core` | CLI tools, shell, fonts, editors, containers, databases, runtimes, required packages only |
+| `extended` | Everything in core, plus browsers, productivity apps, virtualization, and all optional desktop applications |
 
 Use a profile directly in non-interactive runs:
 
@@ -73,8 +73,9 @@ Profile membership is defined in `config/profiles.conf`.
 - Change pinned versions in `config/pins.conf` and `config/runtimes.conf`.
 - Manage user files through `dotfiles/manifest.tsv`; destinations must also be
   added to `DOTFILES_ALLOWED_TARGETS` in `lib/dotfiles.sh`.
-- Database, virtualization, and optional desktop apps are opt-in through
-  `config/settings.conf`.
+- Database and virtualization services are opt-in through
+  `config/settings.conf`. The extended profile installs optional desktop apps
+  automatically; direct `--module` runs use `INSTALL_OPTIONAL_APPS`.
 
 See [customization](docs/customization.md) and
 [troubleshooting](docs/troubleshooting.md).

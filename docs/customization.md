@@ -48,8 +48,8 @@ whether it belongs to the core profile:
 - Add it to `CORE_MODULES` in `config/profiles.conf` for the core profile.
 - Leave it out to make it available only in the extended profile.
 
-The extended profile installs every module in `config/modules.conf`. Module
-dependencies are resolved automatically.
+The extended profile installs every module in `config/modules.conf`, including
+their optional applications. Module dependencies are resolved automatically.
 
 ## Dotfiles
 
@@ -123,5 +123,9 @@ Update an explicit version, then rerun `./install.sh` or
 
 Database and virtualization services are disabled by default. To enable them,
 set `ENABLE_DATABASE_SERVICES=1` or `ENABLE_VIRTUALIZATION_SERVICES=1` in
-`config/settings.conf` before running the installer. Optional desktop
-applications are installed only when `INSTALL_OPTIONAL_APPS=1`.
+`config/settings.conf` before running the installer.
+
+The extended profile always installs optional desktop applications, including
+productivity apps, browsers, and optional development tools. The core profile
+always skips them. Direct `--module` runs have no profile, so they install
+optional applications only when `INSTALL_OPTIONAL_APPS=1`.

@@ -1083,6 +1083,103 @@ expect_failure "package manifest validation rejects option-like tokens" validati
 printf 'dnf ../pkg\n' >"$REPO_ROOT/modules/pkgmod/packages.fedora"
 expect_failure "package manifest validation rejects traversal tokens" validation_package_manifests
 
+# Profile policy: extended always includes optional apps, core always excludes
+# them, and direct --module runs follow INSTALL_OPTIONAL_APPS.
+OPTIONAL_REPO="$TEST_TMP/m2-optional-repo"
+mkdir -p "$OPTIONAL_REPO/modules/optmod"
+cat >"$OPTIONAL_REPO/modules/optmod/packages.fedora" <<'OPTIONAL_MANIFEST'
+dnf required-pkg
+dnf optional-pkg optional
+flatpak org.example.Required
+flatpak org.example.Optional optional
+OPTIONAL_MANIFEST
+REPO_ROOT="$OPTIONAL_REPO"
+PLATFORM=fedora
+OPTIONAL_CAPTURE="$TEST_TMP/m2-optional-capture"
+ORIGINAL_DNF_INSTALL="$(declare -f dnf_install)"
+ORIGINAL_FLATPAK_INSTALL="$(declare -f flatpak_install)"
+dnf_install() { printf 'dnf %s\n' "$*" >>"$OPTIONAL_CAPTURE"; }
+flatpak_install() { printf 'flatpak %s\n' "$*" >>"$OPTIONAL_CAPTURE"; }
+SAVED_INSTALL_OPTIONAL_APPS="$INSTALL_OPTIONAL_APPS"
+SAVED_PROFILE="${PROFILE:-}"
+
+rm -f -- "$OPTIONAL_CAPTURE"
+PROFILE=extended
+INSTALL_OPTIONAL_APPS=0
+check "extended profile installs optional packages despite the direct-run setting" \
+  packages_install_module optmod
+captured="$(cat "$OPTIONAL_CAPTURE" 2>/dev/null || true)"
+expect_match "extended profile installs optional DNF packages" \
+  $'(^|\n)dnf optional-pkg($|\n)' "$captured"
+expect_match "extended profile installs optional Flatpak applications" \
+  $'(^|\n)flatpak org\.example\.Optional($|\n)' "$captured"
+
+rm -f -- "$OPTIONAL_CAPTURE"
+PROFILE=core
+INSTALL_OPTIONAL_APPS=1
+check "core profile skips optional packages even when enabled in settings" \
+  packages_install_module optmod
+captured="$(cat "$OPTIONAL_CAPTURE" 2>/dev/null || true)"
+if [[ "$captured" != *"optional-pkg"* && "$captured" != *"org.example.Optional"* ]]; then
+  pass "core profile did not install optional packages"
+else
+  fail "core profile installed optional packages"
+fi
+expect_match "core profile still installs required packages" \
+  $'(^|\n)flatpak org\.example\.Required($|\n)' "$captured"
+
+rm -f -- "$OPTIONAL_CAPTURE"
+unset PROFILE
+INSTALL_OPTIONAL_APPS=1
+check "direct module runs install optional packages when enabled" \
+  packages_install_module optmod
+captured="$(cat "$OPTIONAL_CAPTURE" 2>/dev/null || true)"
+expect_match "direct module run installs optional packages" \
+  $'(^|\n)flatpak org\.example\.Optional($|\n)' "$captured"
+
+rm -f -- "$OPTIONAL_CAPTURE"
+INSTALL_OPTIONAL_APPS=0
+check "direct module runs skip optional packages by default" \
+  packages_install_module optmod
+captured="$(cat "$OPTIONAL_CAPTURE" 2>/dev/null || true)"
+if [[ "$captured" != *"optional-pkg"* && "$captured" != *"org.example.Optional"* ]]; then
+  pass "direct module run did not install optional packages"
+else
+  fail "direct module run installed optional packages"
+fi
+
+REPO_ROOT="$ACTUAL_REPO"
+PROFILE=extended
+INSTALL_OPTIONAL_APPS=0
+rm -f -- "$OPTIONAL_CAPTURE"
+check "extended profile installs all productivity applications" \
+  packages_install_module productivity
+captured="$(cat "$OPTIONAL_CAPTURE" 2>/dev/null || true)"
+for productivity_app in \
+  md.obsidian.Obsidian \
+  org.keepassxc.KeePassXC \
+  me.proton.Mail \
+  me.proton.Pass \
+  com.protonvpn.www \
+  io.github.shiftey.Desktop \
+  com.github.tchx84.Flatseal \
+  com.mattjakeman.ExtensionManager; do
+  if grep -Fq -- "$productivity_app" <<<"$captured"; then
+    pass "extended profile includes productivity app $productivity_app"
+  else
+    fail "extended profile omitted productivity app $productivity_app"
+  fi
+done
+
+if [[ -n "$SAVED_PROFILE" ]]; then
+  PROFILE="$SAVED_PROFILE"
+else
+  unset PROFILE
+fi
+INSTALL_OPTIONAL_APPS="$SAVED_INSTALL_OPTIONAL_APPS"
+eval "$ORIGINAL_DNF_INSTALL"
+eval "$ORIGINAL_FLATPAK_INSTALL"
+
 REPO_ROOT="$ACTUAL_REPO"
 SELECTED_MODULES=()
 eval "$ORIGINAL_RUN_SUDO"
