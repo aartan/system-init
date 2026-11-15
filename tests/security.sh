@@ -1027,7 +1027,7 @@ expect_failure "flatpak_remove rejects an option-like application" flatpak_remov
 [[ ! -e "$CAPTURE" ]] && pass "flatpak_remove did not invoke sudo for an invalid token" || fail "flatpak_remove invoked sudo for an invalid token"
 
 FLATPAK_REMOTE=flathub
-FLATPAK_REPO_URL="http://example.invalid/repo.flatpakrepo"
+FLATPAK_REPO_URL="http://dl.flathub.org/repo/"
 rm -f -- "$CAPTURE"
 expect_failure "flatpak_remote_ensure rejects a non-HTTPS repository URL" flatpak_remote_ensure
 [[ ! -e "$CAPTURE" ]] && pass "non-HTTPS Flatpak repository did not invoke sudo" || fail "non-HTTPS Flatpak repository invoked sudo"
@@ -1035,16 +1035,44 @@ expect_failure "flatpak_remote_ensure rejects a non-HTTPS repository URL" flatpa
 FLATPAK_REPO_URL="-x"
 expect_failure "flatpak_remote_ensure rejects an option-like repository URL" flatpak_remote_ensure
 
-flatpak() { return 0; }
 FLATPAK_REPO_URL="https://example.invalid/repo.flatpakrepo"
 rm -f -- "$CAPTURE"
-check "flatpak_remote_ensure accepts an HTTPS repository" flatpak_remote_ensure
+expect_failure "flatpak_remote_ensure rejects an arbitrary HTTPS repository URL" flatpak_remote_ensure
+[[ ! -e "$CAPTURE" ]] && pass "arbitrary HTTPS Flatpak repository did not invoke sudo" || fail "arbitrary HTTPS Flatpak repository invoked sudo"
+
+FLATPAK_REPO_URL="https://dl.flathub.org.evil.invalid/repo/"
+expect_failure "flatpak_remote_ensure rejects a lookalike Flathub host" flatpak_remote_ensure
+
+check "approved Flathub repository URL is accepted" \
+  flatpak_remote_url_is_approved flathub "https://dl.flathub.org/repo/"
+check "approved legacy Flathub repository URL is accepted" \
+  flatpak_remote_url_is_approved flathub "https://flathub.org/repo/"
+expect_failure "unapproved Flathub repository URL is rejected" \
+  flatpak_remote_url_is_approved flathub "https://evil.example.invalid/repo/"
+
+flatpak() { return 0; }
+FLATPAK_REPO_URL="https://dl.flathub.org/repo/flathub.flatpakrepo"
+rm -f -- "$CAPTURE"
+check "flatpak_remote_ensure accepts the current official Flathub repository" flatpak_remote_ensure
 captured="$(cat "$CAPTURE" 2>/dev/null || true)"
 expect_match "flatpak_remote_ensure passes -- before the remote and URL" \
-  $'(^|\n)remote-add\n--if-not-exists\n--system\n--\nflathub\nhttps://example.invalid/repo.flatpakrepo($|\n)' \
+  $'(^|\n)remote-add\n--if-not-exists\n--system\n--\nflathub\nhttps://dl.flathub.org/repo/flathub.flatpakrepo($|\n)' \
+  "$captured"
+if [[ "$captured" != *"--no-gpg-verify"* ]]; then
+  pass "flatpak_remote_ensure keeps Flatpak GPG verification enabled"
+else
+  fail "flatpak_remote_ensure disabled Flatpak GPG verification"
+fi
+
+rm -f -- "$CAPTURE"
+FLATPAK_REPO_URL="https://flathub.org/repo/flathub.flatpakrepo"
+check "flatpak_remote_ensure accepts the legacy Flathub descriptor" flatpak_remote_ensure
+captured="$(cat "$CAPTURE" 2>/dev/null || true)"
+expect_match "legacy Flathub descriptor is passed through unchanged" \
+  $'(^|\n)remote-add\n--if-not-exists\n--system\n--\nflathub\nhttps://flathub.org/repo/flathub.flatpakrepo($|\n)' \
   "$captured"
 unset -f flatpak
-FLATPAK_REPO_URL="https://flathub.org/repo/flathub.flatpakrepo"
+FLATPAK_REPO_URL="https://dl.flathub.org/repo/flathub.flatpakrepo"
 
 REPO_ROOT="$TEST_TMP/m2-repo"
 mkdir -p "$REPO_ROOT/modules/pkgmod"
@@ -2849,36 +2877,94 @@ else
 fi
 
 # --- F-12 Flatpak URL verification -----------------------------------------
-flatpak_fake_url="https://flathub.example.invalid/repo.flatpakrepo"
+flatpak_fake_remote="flathub"
+flatpak_fake_url="https://dl.flathub.org/repo/"
 flatpak_fake_present=1
 flatpak() {
   if [[ "${1:-}" == "remotes" ]]; then
     if [[ " $* " == *" --columns=name,url "* ]]; then
       if (( flatpak_fake_present == 1 )); then
-        printf 'flathub\t%s\n' "$flatpak_fake_url"
+        printf '%s\t%s\n' "$flatpak_fake_remote" "$flatpak_fake_url"
       fi
     else
       printf 'Name\n'
-      (( flatpak_fake_present == 1 )) && printf 'flathub\n'
+      (( flatpak_fake_present == 1 )) && printf '%s\n' "$flatpak_fake_remote"
     fi
     return 0
   fi
   return 0
 }
 FLATPAK_REMOTE=flathub
-FLATPAK_REPO_URL="$flatpak_fake_url"
-check "F-12: matching Flatpak remote URL is accepted" flatpak_remote_url_matches "$FLATPAK_REMOTE" "$FLATPAK_REPO_URL"
-flatpak_fake_url="https://evil.example.invalid/repo.flatpakrepo"
-expect_failure "F-12: mismatched Flatpak remote URL is rejected" \
-  flatpak_remote_url_matches "$FLATPAK_REMOTE" "https://flathub.example.invalid/repo.flatpakrepo"
-FLATPAK_REPO_URL="https://flathub.example.invalid/repo.flatpakrepo"
-flatpak_fake_url="https://flathub.example.invalid/repo.flatpakrepo"
-flatpak_fake_present=0
+FLATPAK_REPO_URL="$FLATPAK_FLATHUB_LEGACY_REPO_FILE"
+check "F-12: dl Flathub repository matches the legacy descriptor" \
+  flatpak_remote_url_matches "$FLATPAK_REMOTE" "$FLATPAK_REPO_URL"
+FLATPAK_REPO_URL="$FLATPAK_FLATHUB_REPO_FILE"
+check "F-12: dl Flathub repository matches the current descriptor" \
+  flatpak_remote_url_matches "$FLATPAK_REMOTE" "$FLATPAK_REPO_URL"
+FLATPAK_REPO_URL="$FLATPAK_FLATHUB_REPO_URL"
+check "F-12: dl Flathub repository URL matches itself" \
+  flatpak_remote_url_matches "$FLATPAK_REMOTE" "$FLATPAK_REPO_URL"
+flatpak_fake_url="$FLATPAK_FLATHUB_LEGACY_REPO_URL"
+check "F-12: legacy Flathub repository URL matches the current URL" \
+  flatpak_remote_url_matches "$FLATPAK_REMOTE" "$FLATPAK_REPO_URL"
+
+flatpak_fake_url="https://evil.example.invalid/repo/"
+expect_failure "F-12: an unexpected detected URL is rejected" \
+  flatpak_remote_url_matches "$FLATPAK_REMOTE" "$FLATPAK_REPO_URL"
+FLATPAK_REPO_URL="https://evil.example.invalid/repo/"
+flatpak_fake_url="https://evil.example.invalid/repo/"
+expect_failure "F-12: an unapproved expected URL is rejected even when detected matches" \
+  flatpak_remote_url_matches "$FLATPAK_REMOTE" "$FLATPAK_REPO_URL"
+
+flatpak_fake_url="https://evil.example.invalid/repo/"
+FLATPAK_REPO_URL="$FLATPAK_FLATHUB_REPO_FILE"
+flatpak_fake_present=1
+F12_CAPTURE="$TEST_TMP/f12-capture"
+rm -f -- "$F12_CAPTURE"
 ORIGINAL_RUN_SUDO="$(declare -f run_sudo)"
-run_sudo() { return 0; }
+run_sudo() { printf '%s\n' "$@" >"$F12_CAPTURE"; return 0; }
+flatpak_ensure_output="$(flatpak_remote_ensure 2>&1)" && flatpak_ensure_rc=0 || flatpak_ensure_rc=$?
+if (( flatpak_ensure_rc != 0 )) \
+  && grep -Fq "Expected: $FLATPAK_REPO_URL" <<<"$flatpak_ensure_output" \
+  && grep -Fq 'Detected: https://evil.example.invalid/repo/' <<<"$flatpak_ensure_output" \
+  && [[ ! -e "$F12_CAPTURE" ]]; then
+  pass "F-12: existing unexpected remote fails closed without overwrite"
+else
+  fail "F-12: existing unexpected remote was not rejected safely (rc=$flatpak_ensure_rc: ${flatpak_ensure_output//$'\n'/ | })"
+fi
+
+flatpak_fake_present=0
+rm -f -- "$F12_CAPTURE"
 check "F-12: missing remote is added with the expected URL" flatpak_remote_ensure
+captured="$(cat "$F12_CAPTURE" 2>/dev/null || true)"
+expect_match "F-12: remote-add uses the configured official descriptor" \
+  $'(^|\n)remote-add\n--if-not-exists\n--system\n--\nflathub\nhttps://dl\\.flathub\\.org/repo/flathub\\.flatpakrepo($|\n)' \
+  "$captured"
+
+FLATPAK_REMOTE=fedora
+FLATPAK_REPO_URL="oci+https://registry.fedoraproject.org"
+flatpak_fake_remote=fedora
+flatpak_fake_url="$FLATPAK_REPO_URL"
+flatpak_fake_present=1
+check "F-12: Fedora Flatpaks OCI remote still verifies" \
+  flatpak_remote_url_matches "$FLATPAK_REMOTE" "$FLATPAK_REPO_URL"
+flatpak_fake_url="oci+https://registry.fedoraproject.org#testing"
+expect_failure "F-12: Fedora testing remote is not accepted as the stable remote" \
+  flatpak_remote_url_matches "$FLATPAK_REMOTE" "$FLATPAK_REPO_URL"
+
+flatpak_fake_url="$FLATPAK_REPO_URL"
+flatpak_fake_present=0
+rm -f -- "$F12_CAPTURE"
+check "F-12: missing Fedora Flatpaks remote is added unchanged" flatpak_remote_ensure
+captured="$(cat "$F12_CAPTURE" 2>/dev/null || true)"
+expect_match "F-12: Fedora remote-add remains unchanged" \
+  $'(^|\n)remote-add\n--if-not-exists\n--system\n--\nfedora\noci\\+https://registry\\.fedoraproject\\.org($|\n)' \
+  "$captured"
+
 eval "$ORIGINAL_RUN_SUDO"
 unset -f flatpak
+FLATPAK_REMOTE=flathub
+FLATPAK_REPO_URL="$FLATPAK_FLATHUB_REPO_FILE"
 
 # --- F-13 Git configuration isolation --------------------------------------
 if command -v git >/dev/null 2>&1; then

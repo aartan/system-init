@@ -172,8 +172,10 @@ git config --file ~/.gitconfig.local user.email "you@example.com"
 - Git inspections run with system/global configuration disabled, hostile Git
   environment variables cleared, repository-local executable configuration
   rejected, and group/other-writable checkout metadata rejected.
-- Flatpak system remotes are checked by name and URL, and only system-scope
-  Flatpak applications count as installed.
+- Flatpak system remotes are checked by name and an explicit allow-list of
+  official Flathub endpoints (including both the legacy descriptor and the
+  current `dl.flathub.org` repository URL), and only system-scope Flatpak
+  applications count as installed.
 - mise-managed runtimes are installed only on x86-64. On aarch64 the mise
   module fails closed with an explicit message rather than installing an
   x86-64 binary. Doctor uses installed-runtime inspection (`mise ls --installed`

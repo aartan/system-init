@@ -45,10 +45,13 @@ Flatpak applications only produce warnings.
 
 ```bash
 flatpak remotes --system
-sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 ```
 
-Then rerun the affected module.
+Flatpak may display the configured remote as `https://dl.flathub.org/repo/`;
+both that repository URL and the official `.flatpakrepo` descriptors are
+accepted. The installer refuses unapproved URLs rather than replacing an
+existing remote. Then rerun the affected module.
 
 ## A dotfile is not linked
 

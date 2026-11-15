@@ -317,6 +317,9 @@ if packages_selected_managers | grep -Fxq flatpak; then
     ok "Flatpak remote '$FLATPAK_REMOTE' is configured with the expected URL."
   else
     fail "Flatpak remote '$FLATPAK_REMOTE' is missing or has an unexpected URL."
+    flatpak_actual_url="$(flatpak_system_remote_url "$FLATPAK_REMOTE" 2>/dev/null || true)"
+    log_error "Expected: $FLATPAK_REPO_URL"
+    log_error "Detected: ${flatpak_actual_url:-<missing>}"
   fi
 fi
 
