@@ -9,8 +9,95 @@ DEV_SETUP_DOTFILES_SOURCED=1
 
 DOTFILES_MANIFEST="$REPO_ROOT/dotfiles/manifest.tsv"
 
+# Only these destinations are managed by this repository. Adding a new
+# dotfile requires an explicit entry here; arbitrary manifest targets are not
+# allowed, even if they are relative to $HOME.
+DOTFILES_ALLOWED_TARGETS=(
+  ".gitconfig"
+  ".zshrc"
+  ".p10k.zsh"
+  ".config/alacritty/alacritty.toml"
+  ".config/btop/btop.conf"
+  ".config/Code/User/settings.json"
+)
+
+# Additional files created or updated by the installer at an exact, known
+# destination. They are valid restore destinations but are never linked from
+# the dotfiles manifest.
+DOTFILES_RESTORE_EXTRA_TARGETS=(
+  ".gitconfig.local"
+)
+
 _dotfiles_manifest_error() {
   printf 'dotfiles manifest: %s\n' "$*" >&2
+}
+
+dotfiles_target_allowed() {
+  local target="$1"
+  local allowed
+  for allowed in "${DOTFILES_ALLOWED_TARGETS[@]}"; do
+    [[ "$target" == "$allowed" ]] && return 0
+  done
+  return 1
+}
+
+dotfiles_restore_extra_allowed() {
+  local target="$1"
+  local allowed
+  for allowed in "${DOTFILES_RESTORE_EXTRA_TARGETS[@]}"; do
+    [[ "$target" == "$allowed" ]] && return 0
+  done
+  return 1
+}
+
+# Validate a destination expressed relative to $TARGET_HOME. allow_extra=1 is
+# used only by restore, where installer-created side files are legitimate.
+dotfiles_target_rel_is_safe() {
+  local target="$1"
+  local allow_extra="${2:-0}"
+  local home_lexical home_canonical target_lexical
+  local parent_lexical parent_root parent_canonical
+
+  [[ -n "$target" ]] || return 1
+  [[ "$target" != /* && "$target" != *..* && "$target" != "." && "$target" != "./" ]] || return 1
+  if [[ "$allow_extra" == "1" ]]; then
+    dotfiles_target_allowed "$target" || dotfiles_restore_extra_allowed "$target" || return 1
+  else
+    dotfiles_target_allowed "$target" || return 1
+  fi
+
+  home_lexical="$(realpath -m -s -- "$TARGET_HOME" 2>/dev/null)" || return 1
+  home_canonical="$(target_home_resolve 2>/dev/null)" || return 1
+  target_lexical="$(realpath -m -s -- "$TARGET_HOME/$target" 2>/dev/null)" || return 1
+
+  # Accept either the spelled home (possibly a symlink) or its canonical form.
+  [[ "$target_lexical" == "$home_lexical"/* || "$target_lexical" == "$home_canonical"/* ]] || return 1
+
+  if [[ "$target_lexical" == "$home_lexical"/* ]]; then
+    parent_root="$home_lexical"
+  else
+    parent_root="$home_canonical"
+  fi
+  parent_lexical="$(dirname -- "$target_lexical")"
+  [[ "$parent_lexical" == "$parent_root" || "$parent_lexical" == "$parent_root"/* ]] || return 1
+
+  # Reject any existing symlinked parent below the home root. The leaf itself
+  # may be a managed symlink and is handled by the backup/replace path.
+  path_has_symlink_component "$parent_lexical" "$parent_root" && return 1
+
+  # Existing symlink components must not redirect the parent outside home.
+  parent_canonical="$(realpath -m -- "$parent_lexical" 2>/dev/null)" || return 1
+  [[ "$parent_canonical" == "$home_canonical" || "$parent_canonical" == "$home_canonical"/* ]] || return 1
+
+  return 0
+}
+
+dotfiles_target_is_safe() {
+  dotfiles_target_rel_is_safe "$1" 0
+}
+
+dotfiles_restore_target_is_safe() {
+  dotfiles_target_rel_is_safe "$1" 1
 }
 
 dotfiles_platform_matches() {
@@ -41,6 +128,10 @@ dotfiles_row_valid() {
     return 1
   }
 
+  if ! module_name_is_valid "$module"; then
+    _dotfiles_manifest_error "invalid module name '$module'."
+    return 1
+  fi
   if [[ ! -d "$REPO_ROOT/modules/$module" ]]; then
     _dotfiles_manifest_error "unknown module '$module'."
     return 1
@@ -84,8 +175,8 @@ dotfiles_row_valid() {
     return 1
   fi
 
-  if [[ "$target" == /* || "$target" == *..* || "$target" == "" ]]; then
-    _dotfiles_manifest_error "target must be relative to HOME and must not contain '..': $target"
+  if ! dotfiles_target_is_safe "$target"; then
+    _dotfiles_manifest_error "target is not an approved managed destination: $target"
     return 1
   fi
 
@@ -194,8 +285,18 @@ dotfiles_install_one() {
   source_abs="$(dotfiles_source_abs "$source_rel")"
   target_abs="$(dotfiles_target_abs "$target_rel")"
 
+  if ! dotfiles_target_is_safe "$target_rel"; then
+    record_failure "Refusing unsafe dotfile target: $target_rel"
+    return 1
+  fi
+
   if [[ ! -e "$source_abs" ]]; then
     record_failure "Dotfile source missing: $source_rel"
+    return 1
+  fi
+
+  if [[ -d "$target_abs" && ! -L "$target_abs" ]]; then
+    record_failure "Refusing to replace a directory with a dotfile: $target_rel"
     return 1
   fi
 
@@ -224,10 +325,23 @@ dotfiles_install_one() {
   if [[ -e "$target_abs" || -L "$target_abs" ]]; then
     had_conflict=1
     backup_path "$target_abs" "dotfile-conflict" || return 1
+    # A target that appeared after the pre-install backup starts a new
+    # snapshot. Finalize it before removing the target so the only copy is
+    # actually published and restorable.
+    if [[ -n "${BACKUP_RUN_DIR:-}" && "${BACKUP_SNAPSHOT_COMPLETE:-0}" != "1" ]]; then
+      backup_finalize || {
+        record_failure "Could not finalize backup for dotfile target: $target_rel"
+        return 1
+      }
+    fi
     rm -rf -- "$target_abs" || return 1
   fi
 
   mkdir -p -- "$(dirname -- "$target_abs")" || return 1
+  if path_has_symlink_component "$(dirname -- "$target_abs")" "$TARGET_HOME"; then
+    record_failure "Refusing dotfile target with a symlinked parent: $target_rel"
+    return 1
+  fi
 
   if [[ "$strategy" == "symlink" ]]; then
     ln -s -- "$source_abs" "$target_abs" || return 1

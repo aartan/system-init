@@ -84,7 +84,12 @@ log_cmd() {
 
 logging_init() {
   if [[ -n "$LOG_FILE" ]]; then
-    : >"$LOG_FILE"
-    chmod 600 "$LOG_FILE"
+    local requested_log="$LOG_FILE"
+    LOG_FILE=""
+    if ! printf '' | write_private_file "$requested_log"; then
+      log_error "Refusing to create the log file at an unsafe path: $requested_log"
+      return 1
+    fi
+    LOG_FILE="$requested_log"
   fi
 }

@@ -58,6 +58,17 @@ packages_array_contains() {
   return 1
 }
 
+# The extended profile is the full workstation and always includes optional
+# applications. Core intentionally stays minimal. Direct --module runs have no
+# profile, so they continue to follow the explicit settings.conf policy.
+packages_optional_apps_enabled() {
+  case "${PROFILE:-}" in
+    extended) return 0 ;;
+    core) return 1 ;;
+    *) [[ "${INSTALL_OPTIONAL_APPS:-0}" == "1" ]] ;;
+  esac
+}
+
 packages_install_module() {
   local module="$1"
   local file
@@ -85,6 +96,11 @@ packages_install_module() {
 
     if [[ -n "${optional:-}" && "$optional" != "optional" ]]; then
       record_failure "Unknown package flag '$optional' in $file: $line"
+      continue
+    fi
+
+    if ! package_name_is_valid "$package"; then
+      record_failure "Refusing invalid package name '$package' in $file."
       continue
     fi
 
@@ -143,7 +159,7 @@ packages_install_module() {
     fi
   fi
 
-  if [[ "$INSTALL_OPTIONAL_APPS" == "1" ]]; then
+  if packages_optional_apps_enabled; then
     if (( ${#dnf_optional[@]} > 0 )); then
       if ! dnf_install "${dnf_optional[@]}"; then
         record_warning "Optional DNF packages failed for module '$module'."
@@ -166,6 +182,12 @@ packages_install_module() {
       if ! brew_cask_install "${cask_optional[@]}"; then
         record_warning "Optional Homebrew casks failed for module '$module'."
       fi
+    fi
+  elif (( ${#dnf_optional[@]} + ${#flatpak_optional[@]} + ${#brew_optional[@]} + ${#cask_optional[@]} > 0 )); then
+    if [[ "${PROFILE:-}" == "core" ]]; then
+      log_info "Optional applications are disabled for the core profile; skipping optional packages for module '$module'."
+    else
+      log_info "Optional applications are disabled; skipping optional packages for module '$module' (set INSTALL_OPTIONAL_APPS=1 for --module runs or use --profile extended)."
     fi
   fi
 }

@@ -2,6 +2,14 @@
 # List system-init modules, packages, and dotfiles.
 set -Eeuo pipefail
 
+if (( EUID == 0 )); then
+  printf 'system-init: refusing to run as root. Run this as your normal user; sudo is requested only when needed.\n' >&2
+  exit 1
+fi
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 export REPO_ROOT
 

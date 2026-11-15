@@ -29,7 +29,7 @@ fonts_install() {
 
   require_command tar || return 1
   require_command curl || return 1
-  make_tmp_dir
+  make_tmp_dir || return 1
 
   local archive="$TMP_DIR/JetBrainsMono.tar.xz"
   local extract_dir="$TMP_DIR/fonts"
@@ -53,7 +53,15 @@ fonts_install() {
     return 1
   fi
 
+  if [[ -L "$FONT_DIR" ]] || path_has_symlink_component "$FONT_DIR" "$TARGET_HOME"; then
+    log_error "Refusing to install fonts through a symlinked directory: $FONT_DIR"
+    return 1
+  fi
   install -d -m 0755 "$FONT_DIR"
+  if [[ -L "$FONT_DIR" ]] || path_has_symlink_component "$FONT_DIR" "$TARGET_HOME"; then
+    log_error "Font installation directory became unsafe: $FONT_DIR"
+    return 1
+  fi
   local font
   for font in "$extract_dir"/*.ttf; do
     [[ -f "$font" ]] || continue

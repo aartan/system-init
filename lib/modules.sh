@@ -20,7 +20,33 @@ modules_all() {
 }
 
 modules_exists() {
-  [[ -f "$REPO_ROOT/modules/$1/module.conf" ]]
+  local module="${1:-}"
+  local module_dir
+  module_name_is_valid "$module" || return 1
+  module_dir="$REPO_ROOT/modules/$module"
+  [[ -d "$module_dir" && ! -L "$module_dir" ]] || return 1
+  [[ -f "$module_dir/module.conf" && ! -L "$module_dir/module.conf" ]]
+}
+
+# Resolve a module hook to an absolute path that is guaranteed to live under
+# modules/. Symlinked module directories and hooks are refused: a checkout
+# owned by another user must not be able to inject code into the installer.
+modules_hook_path() {
+  local module="${1:-}"
+  local modules_root module_dir hook resolved
+
+  module_name_is_valid "$module" || return 1
+
+  modules_root="$(realpath -e -- "$REPO_ROOT/modules" 2>/dev/null)" || return 1
+  module_dir="$modules_root/$module"
+  [[ -d "$module_dir" && ! -L "$module_dir" ]] || return 1
+
+  hook="$module_dir/post-install.sh"
+  [[ -f "$hook" && ! -L "$hook" ]] || return 1
+
+  resolved="$(realpath -e -- "$hook" 2>/dev/null)" || return 1
+  [[ "$resolved" == "$modules_root"/* ]] || return 1
+  printf '%s\n' "$resolved"
 }
 
 module_in_list() {
@@ -105,11 +131,23 @@ modules_validate_all() {
     fi
     while IFS= read -r dep; do
       [[ -z "$dep" ]] && continue
+      if ! module_name_is_valid "$dep"; then
+        record_failure "Module '$module' has an invalid dependency name: $dep"
+        failed=1
+        continue
+      fi
       if ! modules_exists "$dep"; then
         record_failure "Module '$module' depends on unknown module '$dep'."
         failed=1
       fi
     done < <(modules_dependencies "$module")
+
+    if [[ -e "$REPO_ROOT/modules/$module/post-install.sh" || -L "$REPO_ROOT/modules/$module/post-install.sh" ]]; then
+      if ! modules_hook_path "$module" >/dev/null; then
+        record_failure "Module '$module' has an unsafe post-install hook (symlinked or outside modules/)."
+        failed=1
+      fi
+    fi
   done < <(modules_all)
   return "$failed"
 }
@@ -157,6 +195,10 @@ modules_resolve() {
       index=$((index + 1))
       while IFS= read -r dep; do
         [[ -z "$dep" ]] && continue
+        if ! module_name_is_valid "$dep"; then
+          log_error "Module '$module' has an invalid dependency name: $dep"
+          return 1
+        fi
         if ! modules_exists "$dep"; then
           log_error "Module '$module' depends on unknown module '$dep'."
           return 1
@@ -212,8 +254,12 @@ modules_run() {
       record_failure "Package installation failed for module '$module'."
     fi
 
-    local hook="$REPO_ROOT/modules/$module/post-install.sh"
-    if [[ -f "$hook" ]]; then
+    local hook=""
+    if [[ -e "$REPO_ROOT/modules/$module/post-install.sh" || -L "$REPO_ROOT/modules/$module/post-install.sh" ]]; then
+      if ! hook="$(modules_hook_path "$module")"; then
+        record_failure "Refusing unsafe post-install hook for module '$module'."
+        continue
+      fi
       # shellcheck disable=SC1090
       if ! source "$hook"; then
         record_failure "Failed to load post-install hook for module '$module'."

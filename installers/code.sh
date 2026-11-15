@@ -8,8 +8,8 @@ fi
 DEV_SETUP_CODE_SOURCED=1
 
 VSCODE_EXTENSIONS=(
-  dbaeumer.vscode-eslint
-  esbenp.prettier-vscode
+  "dbaeumer.vscode-eslint@${VSCODE_ESLINT_VERSION}"
+  "esbenp.prettier-vscode@${VSCODE_PRETTIER_VERSION}"
 )
 
 code_extensions_install() {
@@ -24,7 +24,7 @@ code_extensions_install() {
     return 1
   fi
 
-  installed="$(code --list-extensions 2>/dev/null || true)"
+  installed="$(code --list-extensions --show-versions 2>/dev/null || true)"
 
   for extension in "${VSCODE_EXTENSIONS[@]}"; do
     if grep -Fxiq -- "$extension" <<<"$installed"; then

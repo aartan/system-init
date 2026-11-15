@@ -15,7 +15,7 @@ PLATFORM_ARCH=""
 FEDORA_VERSION=""
 # Consumed by platforms/fedora/platform.sh.
 # shellcheck disable=SC2034
-FEDORA_MIN_VERSION=40
+FEDORA_MIN_VERSION=43
 
 platform_detect() {
   local kernel
@@ -111,12 +111,12 @@ platform_sudo_prepare() {
     return 0
   fi
 
-  if ! have_command sudo; then
-    log_error "sudo is required for package and system changes."
+  if ! sudo_binary_valid; then
+    log_error "sudo is required at $SUDO_BIN (absolute, executable, non-symlink)."
     return 1
   fi
 
-  if sudo -n true >/dev/null 2>&1; then
+  if "$SUDO_BIN" -n true >/dev/null 2>&1; then
     return 0
   fi
 
@@ -127,7 +127,7 @@ platform_sudo_prepare() {
   fi
 
   log_info "Requesting sudo access for package and system changes..."
-  sudo -v
+  "$SUDO_BIN" -v
 }
 
 platform_arch_supported() {

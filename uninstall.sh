@@ -2,6 +2,17 @@
 # Remove system-init managed links and, explicitly, optional components.
 set -Eeuo pipefail
 
+# Refuse root before sourcing anything from the repository. Sudo is requested
+# only for individual privileged commands after validation.
+if (( EUID == 0 )); then
+  printf 'system-init: refusing to run as root. Run this as your normal user; sudo is requested only when needed.\n' >&2
+  exit 1
+fi
+
+# Resolve privileged commands only from trusted system directories.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export REPO_ROOT
 
@@ -19,6 +30,7 @@ source "$REPO_ROOT/lib/modules.sh"
 source "$REPO_ROOT/lib/dotfiles.sh"
 # shellcheck source=lib/backups.sh
 source "$REPO_ROOT/lib/backups.sh"
+trap 'state_lock_release' EXIT
 # shellcheck source=installers/dnf.sh
 source "$REPO_ROOT/installers/dnf.sh"
 # shellcheck source=installers/flatpak.sh
@@ -28,6 +40,9 @@ REMOVE_PACKAGES=0
 RESTORE_BACKUPS=0
 PURGE_STATE=0
 ASSUME_YES=0
+# Explicit flags only; do not inherit a permissive environment default.
+RESTORE_ALLOW_LEGACY=0
+RESTORE_ALLOW_UNSIGNED=0
 
 PROTECTED_DNF=(
   sudo
@@ -40,6 +55,16 @@ PROTECTED_DNF=(
   xz
   git
   flatpak
+  bash
+  coreutils
+  dnf
+  rpm
+  systemd
+  glibc
+  passwd
+  shadow-utils
+  kernel
+  kernel-core
 )
 
 usage() {
@@ -50,6 +75,8 @@ By default this removes only managed dotfile links. Nothing else is touched.
 
 Options:
   --restore-backups  Restore the newest backup snapshot first.
+  --allow-legacy     Allow restoring an unverified v1 snapshot (explicit).
+  --allow-unsigned   Allow restoring an unsigned v2 snapshot (hashes only).
   --packages         Remove declared Flatpak apps and non-protected DNF packages.
   --yes              Skip the package-removal confirmation prompt.
   --purge-state      Delete all system-init backups, logs, and state (explicit).
@@ -65,6 +92,12 @@ while (( $# > 0 )); do
   case "$1" in
     --restore-backups)
       RESTORE_BACKUPS=1
+      ;;
+    --allow-legacy)
+      RESTORE_ALLOW_LEGACY=1
+      ;;
+    --allow-unsigned)
+      RESTORE_ALLOW_UNSIGNED=1
       ;;
     --packages)
       REMOVE_PACKAGES=1
@@ -97,6 +130,7 @@ platform_load || exit 1
 modules_resolve || exit 2
 
 init_state_dirs
+[[ "$DRY_RUN" == "1" ]] || state_lock_acquire "operation" || exit 1
 logging_init
 
 log_section "system-init uninstall"
@@ -104,13 +138,18 @@ if [[ "$DRY_RUN" == "1" ]]; then
   log_warn "Dry-run mode: nothing will be removed."
 fi
 
+restore_failed=0
 if [[ "$RESTORE_BACKUPS" == "1" ]]; then
   snapshot="$(backup_latest)"
   if [[ -z "$snapshot" ]]; then
     record_failure "No backup snapshot is available to restore."
+    restore_failed=1
   else
     log_info "Restoring newest snapshot before unlinking: $snapshot"
-    backup_restore_snapshot "$snapshot" || record_failure "Backup restore failed."
+    if ! backup_restore_snapshot "$snapshot"; then
+      record_failure "Backup restore failed."
+      restore_failed=1
+    fi
   fi
 fi
 
@@ -118,13 +157,20 @@ fi
 # Managed dotfiles
 # ---------------------------------------------------------------------------
 log_section "Managed dotfiles"
-entries="$(dotfiles_entries)" || {
-  record_failure "Dotfiles manifest validation failed."
-  entries=""
-}
-
 removed=0
 kept=0
+
+if (( restore_failed == 1 )); then
+  log_error "Skipping managed dotfile removal because backup restoration did not complete."
+fi
+
+entries=""
+if (( restore_failed == 0 )); then
+  entries="$(dotfiles_entries)" || {
+    record_failure "Dotfiles manifest validation failed."
+    entries=""
+  }
+fi
 
 while IFS=$'\t' read -r module strategy source_rel target_rel; do
   [[ -z "${module:-}" ]] && continue
@@ -135,10 +181,13 @@ while IFS=$'\t' read -r module strategy source_rel target_rel; do
     if dotfiles_target_is_managed "$source_abs" "$target_abs"; then
       if [[ "$DRY_RUN" == "1" ]]; then
         log_dry "remove symlink $(log_cmd "$target_abs")"
+        removed=$((removed + 1))
+      elif rm -f -- "$target_abs"; then
+        log_success "Removed symlink $target_rel"
+        removed=$((removed + 1))
       else
-        rm -f -- "$target_abs" && log_success "Removed symlink $target_rel"
+        record_failure "Could not remove managed symlink: $target_abs"
       fi
-      removed=$((removed + 1))
     else
       log_debug "Not removing unmanaged path: $target_abs"
       kept=$((kept + 1))
@@ -147,17 +196,22 @@ while IFS=$'\t' read -r module strategy source_rel target_rel; do
     if dotfiles_copy_matches "$source_abs" "$target_abs"; then
       if [[ "$DRY_RUN" == "1" ]]; then
         log_dry "remove copied file $(log_cmd "$target_abs")"
+        removed=$((removed + 1))
+      elif rm -f -- "$target_abs"; then
+        log_success "Removed copied file $target_rel"
+        removed=$((removed + 1))
       else
-        rm -rf -- "$target_abs" && log_success "Removed copied file $target_rel"
+        record_failure "Could not remove managed copied file: $target_abs"
       fi
-      removed=$((removed + 1))
     else
       kept=$((kept + 1))
     fi
   fi
 done <<<"$entries"
 
-if [[ "$DRY_RUN" == "1" ]]; then
+if (( restore_failed == 1 )); then
+  log_info "No managed dotfiles were removed."
+elif [[ "$DRY_RUN" == "1" ]]; then
   log_dry "$removed managed path(s) would be removed; $kept unmanaged path(s) would be kept."
 else
   log_info "$removed managed path(s) removed; $kept unmanaged path(s) kept."
@@ -166,7 +220,10 @@ fi
 # ---------------------------------------------------------------------------
 # Packages
 # ---------------------------------------------------------------------------
-if [[ "$REMOVE_PACKAGES" == "1" ]]; then
+if [[ "$REMOVE_PACKAGES" == "1" && "$restore_failed" == "1" ]]; then
+  log_error "Skipping package removal because backup restoration did not complete."
+  log_error "Installed packages and application data were preserved."
+elif [[ "$REMOVE_PACKAGES" == "1" ]]; then
   log_section "Declared packages"
   flatpak_apps=()
   dnf_packages=()
@@ -179,6 +236,14 @@ if [[ "$REMOVE_PACKAGES" == "1" ]]; then
       [[ "$line" =~ ^[[:space:]]*$ ]] && continue
       read -r manager package optional <<<"$line"
       [[ -z "${manager:-}" || -z "${package:-}" ]] && continue
+      if ! package_name_is_valid "$package"; then
+        record_failure "Refusing invalid package name '$package' in $file."
+        continue
+      fi
+      if [[ -n "${optional:-}" && "$optional" != "optional" ]]; then
+        record_failure "Unknown package flag '$optional' in $file."
+        continue
+      fi
       case "$manager" in
         flatpak)
           if flatpak_package_installed "$package"; then
@@ -237,13 +302,21 @@ fi
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
-if [[ "$PURGE_STATE" == "1" ]]; then
+if [[ "$PURGE_STATE" == "1" ]] && (( restore_failed == 1 || ${#FAILED_ITEMS[@]} > 0 )); then
+  log_error "Refusing to purge state because the uninstall recorded failures."
+  log_error "Backups, journals, and recovery staging data were preserved at: $STATE_DIR"
+  record_failure "State purge refused after a failed uninstall operation."
+elif [[ "$PURGE_STATE" == "1" ]]; then
   log_section "State and backups"
   if [[ -d "$STATE_DIR" ]]; then
-    if [[ "$DRY_RUN" == "1" ]]; then
+    if ! state_dir_is_safe; then
+      record_failure "Refusing to purge an unsafe state directory: $STATE_DIR"
+    elif [[ "$DRY_RUN" == "1" ]]; then
       log_dry "delete $(log_cmd "$STATE_DIR")"
+    elif safe_rm_rf "$STATE_DIR"; then
+      log_success "Deleted $STATE_DIR"
     else
-      rm -rf -- "$STATE_DIR" && log_success "Deleted $STATE_DIR"
+      record_failure "Could not delete $STATE_DIR"
     fi
   else
     log_info "No state directory exists."
@@ -255,8 +328,11 @@ if (( ${#FAILED_ITEMS[@]} > 0 )); then
   exit 1
 fi
 
+state_lock_release
 if [[ "$DRY_RUN" == "1" ]]; then
   log_success "Dry-run complete. Nothing was removed."
+elif (( ${#FAILED_ITEMS[@]} > 0 )); then
+  log_error "Uninstall completed with failures; some paths or recovery material were preserved."
 else
   log_success "Uninstall complete."
 fi
