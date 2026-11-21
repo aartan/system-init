@@ -9,12 +9,25 @@ if (( EUID == 0 )); then
   exit 1
 fi
 
-# Resolve privileged commands only from trusted system directories.
+# Resolve privileged commands only from trusted system directories. macOS
+# applies its validated Homebrew PATH in lib/bootstrap.sh instead.
+if [[ "$(uname -s)" != "Darwin" ]]; then
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export REPO_ROOT
+
+# shellcheck source=lib/bootstrap.sh
+source "$REPO_ROOT/lib/bootstrap.sh"
+# Listing modules is read-only and must never bootstrap packages.
+for _install_arg in "$@"; do
+  [[ "$_install_arg" == "--list" ]] && export DEV_SETUP_BOOTSTRAP_READONLY=1
+done
+unset _install_arg
+# Bootstrap is intentionally Bash 3.2-safe and re-execs Homebrew Bash 5.
+bootstrap_run "$@"
 
 # shellcheck source=lib/logging.sh
 source "$REPO_ROOT/lib/logging.sh"
@@ -41,6 +54,8 @@ source "$REPO_ROOT/installers/dnf.sh"
 source "$REPO_ROOT/installers/flatpak.sh"
 # shellcheck source=installers/brew.sh
 source "$REPO_ROOT/installers/brew.sh"
+# shellcheck source=installers/alacritty.sh
+source "$REPO_ROOT/installers/alacritty.sh"
 # shellcheck source=installers/mise.sh
 source "$REPO_ROOT/installers/mise.sh"
 # shellcheck source=installers/fonts.sh
@@ -55,6 +70,8 @@ REQUESTED_MODULES=()
 MODULE_OPTION_GIVEN=0
 SHOW_LIST=0
 PROFILE=""
+ASSUME_YES=0
+NON_INTERACTIVE=0
 INSTALL_OK=0
 GIT_IDENTITY_NAME=""
 GIT_IDENTITY_EMAIL=""
@@ -65,9 +82,9 @@ usage() {
   cat <<'EOF'
 Usage: ./install.sh [OPTIONS]
 
-Install a development workstation. Without --profile or --module, an
-interactive run prompts for the core or extended profile. A non-interactive
-run defaults to core.
+Install a development workstation. On Fedora, an interactive run prompts for
+the core or extended profile and non-interactive runs default to core. On
+macOS the default is extended and the profile prompt is skipped.
 
 Options:
   --profile NAME     core (development defaults) or extended (all modules and
@@ -76,6 +93,9 @@ Options:
   --no-dotfiles      Install packages and system configuration only.
   --module NAME      Install NAME and its dependencies. Repeatable.
   --list             List modules, package counts, and descriptions.
+  --yes, -y          Skip the macOS installation-plan confirmation.
+  --non-interactive  Never prompt; implies --yes. Uses environment/global
+                     settings for the profile and Git identity.
   -h, --help         Show this help.
 
 Examples:
@@ -146,6 +166,13 @@ parse_args() {
       --list)
         SHOW_LIST=1
         ;;
+      --yes|-y)
+        ASSUME_YES=1
+        ;;
+      --non-interactive)
+        ASSUME_YES=1
+        NON_INTERACTIVE=1
+        ;;
       -h|--help)
         usage
         exit 0
@@ -195,6 +222,22 @@ select_profile() {
     return 0
   fi
 
+  if (( NON_INTERACTIVE == 1 )); then
+    if [[ "$PLATFORM" == "macos" ]]; then
+      PROFILE="${MACOS_DEFAULT_PROFILE:-extended}"
+    else
+      PROFILE=core
+    fi
+    log_info "Non-interactive run; using the $PROFILE profile."
+    return 0
+  fi
+
+  if [[ "$PLATFORM" == "macos" ]]; then
+    PROFILE="${MACOS_DEFAULT_PROFILE:-extended}"
+    log_info "macOS uses the $PROFILE profile; pass --profile core for a minimal install."
+    return 0
+  fi
+
   if [[ ! -t 0 ]]; then
     PROFILE=core
     log_info "No interactive terminal; using the core profile."
@@ -240,6 +283,73 @@ apply_profile() {
   done < <(modules_profile_modules "$PROFILE")
 }
 
+install_print_plan() {
+  local module line manager package optional count=0
+
+  printf '\nInstallation plan:\n'
+  printf '  Platform: %s (%s)\n' "$PLATFORM_NAME" "$PLATFORM_ARCH"
+  printf '  Profile:  %s\n' "${PROFILE:-custom modules}"
+  printf '  Modules:  %s\n' "${SELECTED_MODULES[*]}"
+  printf '\nPackages:\n'
+  for module in "${SELECTED_MODULES[@]}"; do
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      read -r manager package optional <<<"$line"
+      [[ -n "${manager:-}" && -n "${package:-}" ]] || continue
+      printf '  %-5s %s\n' "$manager" "$package"
+      count=$((count + 1))
+    done < <(packages_list_module "$module")
+  done
+  printf '  (%s package declarations)\n' "$count"
+  printf '\nOther actions:\n'
+  if [[ "$PLATFORM" == "macos" ]]; then
+    printf '  Fonts:   Nerd Fonts v%s into %s\n' "$NERD_FONTS_VERSION" \
+      "$TARGET_HOME/Library/Fonts"
+  else
+    printf '  Fonts:   Nerd Fonts v%s into %s\n' "$NERD_FONTS_VERSION" \
+      "$TARGET_HOME/.local/share/fonts"
+  fi
+  printf '  Dotfiles: managed links with pre-install backups\n'
+  if [[ "$PLATFORM" == "macos" ]]; then
+    printf '  Podman:  machine auto-setup %s (machine: %s)\n' \
+      "$([[ "${PODMAN_MACHINE_AUTO:-1}" == "1" ]] && printf enabled || printf disabled)" \
+      "${PODMAN_MACHINE_NAME:-default}"
+    printf '  Alacritty: v%s from the pinned official DMG\n' "$ALACRITTY_VERSION"
+    printf '  Shell:   /bin/zsh, Oh My Zsh, Starship, plugins\n'
+  fi
+  printf '  Git identity: prompt for name and email; stored in ~/.gitconfig.local\n'
+}
+
+install_confirm() {
+  local answer
+
+  [[ "$PLATFORM" == "macos" ]] || return 0
+  [[ "$DRY_RUN" == "1" ]] && {
+    install_print_plan
+    return 0
+  }
+  [[ "${DEV_SETUP_CONFIRMED:-0}" == "1" ]] && return 0
+  [[ "$ASSUME_YES" == "1" ]] && {
+    install_print_plan
+    return 0
+  }
+
+  install_print_plan
+  if [[ ! -t 0 ]]; then
+    log_error "No interactive terminal. Re-run with --yes or --non-interactive."
+    return 2
+  fi
+  printf '\nProceed with this plan? [y/N] '
+  if ! read -r answer; then
+    printf '\n'
+    return 1
+  fi
+  case "$answer" in
+    [yY]|[yY][eE][sS]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 git_identity_current() {
   local key="$1"
   local value=""
@@ -263,13 +373,13 @@ prompt_git_identity() {
   name="${DEV_SETUP_GIT_NAME:-$(git_identity_current user.name)}"
   email="${DEV_SETUP_GIT_EMAIL:-$(git_identity_current user.email)}"
 
-  if [[ ! -t 0 ]]; then
+  if (( NON_INTERACTIVE == 1 )) || [[ ! -t 0 ]]; then
     if [[ -n "$name" && -n "$email" ]]; then
       GIT_IDENTITY_NAME="$name"
       GIT_IDENTITY_EMAIL="$email"
       log_info "Using the configured Git identity for $name <$email>."
     else
-      log_info "No interactive terminal; skipping the Git identity prompt."
+      log_info "Non-interactive run; skipping the Git identity prompt."
     fi
     return 0
   fi
@@ -351,6 +461,8 @@ prompt_restart() {
   local answer
 
   [[ "$DRY_RUN" == "1" ]] && return 0
+  [[ "$PLATFORM" == "macos" ]] && return 0
+  (( NON_INTERACTIVE == 1 )) && return 0
   [[ -t 0 ]] || return 0
 
   printf '\n'
@@ -377,12 +489,15 @@ show_summary() {
 
   printf '\n'
   log_section "Installation summary"
+  report_summary
 
   if (( ${#FAILED_ITEMS[@]} > 0 )); then
     log_error "Completed with ${#FAILED_ITEMS[@]} failure(s):"
     for item in "${FAILED_ITEMS[@]}"; do
       printf '  - %s\n' "$item"
     done
+  elif [[ "$(report_count failed)" != "0" ]]; then
+    log_error "Completed with $(report_count failed) failed component(s)."
   elif [[ "$DRY_RUN" == "1" ]]; then
     log_success "Dry-run validated all requested modules without recorded failures."
   else
@@ -463,6 +578,16 @@ main() {
     exit 0
   fi
 
+  local confirm_status=0
+  install_confirm || confirm_status=$?
+  if (( confirm_status == 2 )); then
+    log_error "Installation aborted."
+    exit 1
+  elif (( confirm_status != 0 )); then
+    log_info "Installation cancelled."
+    exit 0
+  fi
+
   prompt_git_identity
 
   trap 'on_error $LINENO' ERR
@@ -484,6 +609,18 @@ main() {
 
   log_section "system-init installer"
   log_info "Platform: $PLATFORM_NAME ($PLATFORM_ARCH)"
+  if [[ "$PLATFORM" == "macos" ]]; then
+    if [[ "${DEV_SETUP_HOMEBREW_INSTALLED:-0}" == "1" ]]; then
+      report_installed "Homebrew at $BREW_PREFIX"
+    else
+      report_present "Homebrew at $BREW_PREFIX"
+    fi
+    if [[ "${DEV_SETUP_BASH_INSTALLED:-0}" == "1" ]]; then
+      report_installed "Bash 5 runtime at $BOOTSTRAP_BASH"
+    else
+      report_present "Bash 5 runtime at $BOOTSTRAP_BASH"
+    fi
+  fi
   log_info "Target home: $TARGET_HOME"
   if [[ -n "$PROFILE" ]]; then
     log_info "Profile: $PROFILE"
@@ -525,6 +662,7 @@ main() {
     fi
   else
     log_info "Skipping pre-install dotfile backup (--no-dotfiles)."
+    report_skipped "dotfiles (--no-dotfiles)"
   fi
 
   CURRENT_MODULE="platform"
@@ -567,7 +705,7 @@ main() {
 
   show_summary
 
-  if (( ${#FAILED_ITEMS[@]} > 0 )); then
+  if (( ${#FAILED_ITEMS[@]} > 0 )) || [[ "$(report_count failed)" != "0" ]]; then
     exit 1
   fi
 
@@ -585,7 +723,11 @@ main() {
   else
     log_success "system-init installation complete."
     printf 'Next steps:\n'
-    printf '  1. Restart or log out and back in to apply the new login shell.\n'
+    if [[ "$PLATFORM" == "macos" ]]; then
+      printf '  1. Open a new terminal to load the new shell configuration and fonts.\n'
+    else
+      printf '  1. Restart or log out and back in to apply the new login shell.\n'
+    fi
     printf '  2. Verify the workstation with: ./scripts/doctor.sh\n'
     printf '  3. Review backups at: %s\n' "$BACKUP_DIR"
     prompt_restart
