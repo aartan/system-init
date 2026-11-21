@@ -9,21 +9,45 @@ DEV_SETUP_MISE_SOURCED=1
 
 MISE_BIN="${TARGET_HOME}/.local/bin/mise"
 
-# The pinned mise release is linux-x64. Never install or execute an x86-64
-# binary on another architecture; aarch64 support requires independently
-# verified arm64 archive and binary pins.
+# Fedora uses the linux-x64 release; macOS uses the macos-arm64 release.
+# Never execute a binary whose archive and inner checksum were not pinned.
 mise_arch_supported() {
-  case "${PLATFORM_ARCH:-}" in
-    x86_64) return 0 ;;
-    *) return 1 ;;
-  esac
+  if [[ "${PLATFORM:-fedora}" == "macos" ]]; then
+    [[ "${PLATFORM_ARCH:-}" == "aarch64" ]]
+  else
+    [[ "${PLATFORM_ARCH:-}" == "x86_64" ]]
+  fi
+}
+
+mise_archive_url() {
+  if [[ "${PLATFORM:-fedora}" == "macos" ]]; then
+    printf '%s\n' "$MISE_MACOS_URL"
+  else
+    printf '%s\n' "$MISE_URL"
+  fi
+}
+
+mise_archive_sha256() {
+  if [[ "${PLATFORM:-fedora}" == "macos" ]]; then
+    printf '%s\n' "$MISE_MACOS_SHA256"
+  else
+    printf '%s\n' "$MISE_SHA256"
+  fi
+}
+
+mise_expected_bin_sha256() {
+  if [[ "${PLATFORM:-fedora}" == "macos" ]]; then
+    printf '%s\n' "$MISE_MACOS_BIN_SHA256"
+  else
+    printf '%s\n' "$MISE_BIN_SHA256"
+  fi
 }
 
 mise_binary_trusted() {
   mise_arch_supported || return 1
   [[ -f "$MISE_BIN" && ! -L "$MISE_BIN" && -x "$MISE_BIN" ]] || return 1
-  [[ -n "${MISE_BIN_SHA256:-}" ]] || return 1
-  [[ "$(file_sha256 "$MISE_BIN" 2>/dev/null || true)" == "$MISE_BIN_SHA256" ]]
+  [[ -n "$(mise_expected_bin_sha256)" ]] || return 1
+  [[ "$(file_sha256 "$MISE_BIN" 2>/dev/null || true)" == "$(mise_expected_bin_sha256)" ]]
 }
 
 mise_installed_version() {
@@ -35,7 +59,11 @@ mise_install_binary() {
   local installed
 
   if ! mise_arch_supported; then
-    record_failure "mise is pinned to the linux-x64 release; refusing to install on ${PLATFORM_ARCH:-unknown}."
+    if [[ "${PLATFORM:-fedora}" == "macos" ]]; then
+      record_failure "mise is not pinned for macOS/${PLATFORM_ARCH:-unknown}; refusing to install."
+    else
+      record_failure "mise is pinned to the linux-x64 release; refusing to install on ${PLATFORM_ARCH:-unknown}."
+    fi
     return 1
   fi
 
@@ -43,6 +71,7 @@ mise_install_binary() {
 
   if [[ "$installed" == "$MISE_VERSION" ]]; then
     log_debug "mise $MISE_VERSION is already installed."
+    report_present "mise $MISE_VERSION"
     return 0
   fi
 
@@ -61,18 +90,19 @@ mise_install_binary() {
   local extracted_bin="$extract_dir/mise/bin/mise"
   local install_dir="$TARGET_HOME/.local/bin"
 
-  download_verify "$MISE_URL" "$archive" "$MISE_SHA256" || return 1
+  download_verify "$(mise_archive_url)" "$archive" "$(mise_archive_sha256)" || return 1
   extract_archive "$archive" "$extract_dir" || return 1
 
   if [[ ! -f "$extracted_bin" || -L "$extracted_bin" ]]; then
     log_error "mise archive does not contain a regular mise/bin/mise binary"
     return 1
   fi
-  if [[ -n "${MISE_BIN_SHA256:-}" ]]; then
-    local extracted_sha
+  local expected_bin_sha extracted_sha
+  expected_bin_sha="$(mise_expected_bin_sha256)"
+  if [[ -n "$expected_bin_sha" ]]; then
     extracted_sha="$(file_sha256 "$extracted_bin")"
-    if [[ "$extracted_sha" != "$MISE_BIN_SHA256" ]]; then
-      log_error "mise binary checksum mismatch (expected $MISE_BIN_SHA256, got $extracted_sha)"
+    if [[ "$extracted_sha" != "$expected_bin_sha" ]]; then
+      log_error "mise binary checksum mismatch (expected $expected_bin_sha, got $extracted_sha)"
       return 1
     fi
   fi
@@ -119,6 +149,7 @@ mise_install_binary() {
   fi
 
   log_success "Installed mise $MISE_VERSION"
+  report_installed "mise $MISE_VERSION"
 }
 
 mise_run() {
@@ -149,9 +180,11 @@ mise_install_runtimes() {
     [[ -z "$tool" ]] && continue
     if ! mise_run use --global "${tool}@${version}"; then
       record_failure "mise failed to install ${tool} ${version}"
+      report_failed "mise runtime ${tool}@${version}"
       continue
     fi
     log_success "mise: ${tool} ${version}"
+    report_installed "mise runtime ${tool}@${version}"
   done < <(parse_runtimes)
 
   mise_verify_runtimes
