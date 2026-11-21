@@ -2,18 +2,25 @@
 
 ## Packages
 
-Packages are declared per module in `modules/<name>/packages.fedora`:
+Packages are declared per module in `modules/<name>/packages.fedora` and
+`modules/<name>/packages.macos`:
 
 ```text
-# manager  package  optional
+# Fedora
 dnf        git
 dnf        some-package  optional
 flatpak    md.obsidian.Obsidian  optional
+
+# macOS
+brew       git
+brew       some-package  optional
+cask       visual-studio-code
 ```
 
 Rows are whitespace-delimited. Use one package per line. Mark desktop
 applications and non-essential tools as `optional`; a failed optional install is
-reported as a warning instead of stopping the run.
+reported as a warning instead of stopping the run. macOS system-init manifests
+currently declare every package as required.
 
 Preview changes with:
 
@@ -30,7 +37,7 @@ MODULE_DESCRIPTION="Short description"
 MODULE_DEPENDS="core"
 ```
 
-Add `modules/<name>/packages.fedora` for packages. Add
+Add `modules/<name>/packages.fedora` and/or `packages.macos` for packages. Add
 `modules/<name>/post-install.sh` when configuration or verification is needed:
 
 ```bash
@@ -99,14 +106,21 @@ For non-interactive installs:
 ```bash
 DEV_SETUP_GIT_NAME="Your Name" \
 DEV_SETUP_GIT_EMAIL="you@example.com" \
-./install.sh --profile core
+./install.sh --profile core --non-interactive
 ```
 
 ## Pins and runtimes
 
 - `config/pins.conf`: archive URLs, SHA-256 checksums, Git commits, VS Code
-  extension versions, and third-party repository key fingerprints.
-- `config/runtimes.conf`: mise-managed Node.js, Python, and pnpm versions.
+  extension versions, Homebrew installer commit, and third-party repository key
+  fingerprints.
+- `config/runtimes.conf`: mise-managed Node.js, Python, and pnpm versions for
+  Fedora.
+- `config/runtimes.macos.conf`: the macOS runtime set. It installs Node.js LTS
+  only.
+
+When `config/runtimes.<platform>.conf` exists, it replaces the shared runtime
+file for that platform.
 
 Fedora repositories for VS Code and Brave use local key copies under
 `platforms/fedora/keys/`. The installer verifies each bundle's SHA-256 and
@@ -124,6 +138,15 @@ Update an explicit version, then rerun `./install.sh` or
 Database and virtualization services are disabled by default. To enable them,
 set `ENABLE_DATABASE_SERVICES=1` or `ENABLE_VIRTUALIZATION_SERVICES=1` in
 `config/settings.conf` before running the installer.
+
+On Fedora these settings enable systemd services and libvirt sockets. On macOS
+they launch Postgres.app, start Valkey with Homebrew services, and verify UTM
+and Apple Hypervisor support.
+
+Podman on macOS requires a VM. `PODMAN_MACHINE_AUTO=1` creates a machine when
+none exists and starts an existing stopped machine. `PODMAN_MACHINE_NAME`
+selects the machine name. Set the auto option to `0` to manage machines
+manually.
 
 The extended profile always installs optional desktop applications, including
 productivity apps, browsers, and optional development tools. The core profile

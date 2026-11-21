@@ -1,46 +1,74 @@
 # system-init
 
-An opinionated init script for setting up a Fedora workstation for software development.
+An opinionated init script for setting up a development workstation on Fedora
+Linux or macOS.
 
-It sets up your development environment, installs optional desktop and productivity apps, and manages your dotfiles. Existing files are backed up before being replaced, and you can preview changes with `--dry-run`.
+It installs development tools and desktop applications, configures the shell,
+manages dotfiles, and verifies the result. Existing files are backed up before
+being replaced, and every action can be previewed with `--dry-run`.
 
-**Supported platform:** Fedora Linux 43 or newer
+**Supported platforms**
+
+- Fedora Linux 43 or newer (`x86_64` or `aarch64`)
+- macOS 27 or newer on Apple Silicon (`arm64`) only
 
 ## Requirements
+
+Fedora:
 
 - Fedora Workstation
 - An interactive terminal for `sudo`
 - Network access for DNF, Flatpak, and pinned downloads
 
+macOS:
+
+- macOS 27 on Apple Silicon
+- An interactive terminal for the one-time plan confirmation
+- Network access for Homebrew, mise, and pinned downloads
+- Homebrew at `/opt/homebrew`; it is installed automatically when missing
+
+system-init does not install Firefox on macOS. See
+[macOS details](docs/macos.md).
+
 ## Quick start
 
-    git clone <repository-url>
-    cd system-init
+Fedora:
 
-    # Preview the installation
-    ./install.sh --dry-run
+```bash
+git clone <repository-url>
+cd system-init
+./install.sh --dry-run
+./install.sh
+./scripts/doctor.sh
+```
 
-    # Install (prompts for a profile and Git identity)
-    ./install.sh
+macOS:
 
-    # Verify the installation
-    ./scripts/doctor.sh
+```bash
+git clone <repository-url>
+cd system-init
+./install.sh --dry-run --profile extended
+./install.sh
+./scripts/doctor.sh
+```
 
 ## Profiles
-
-The installer prompts you to choose between two profiles:
 
 | Profile | Contents |
 |---|---|
 | `core` | CLI tools, shell, fonts, editors, containers, databases, runtimes, and required packages |
 | `extended` | Everything in core, plus browsers, productivity apps, virtualization, and optional desktop applications |
 
+On Fedora the installer prompts for a profile; non-interactive runs default to
+`core`. On macOS the default is `extended` and the profile prompt is skipped.
+Use `--profile core` for the minimal macOS set.
+
 You can also select a profile directly:
 
-    ./install.sh --profile core
-    ./install.sh --profile extended
-
-Non-interactive installations default to `core` unless a profile or module is specified.
+```bash
+./install.sh --profile core
+./install.sh --profile extended
+```
 
 Profile membership is defined in `config/profiles.conf`.
 
@@ -48,11 +76,13 @@ Profile membership is defined in `config/profiles.conf`.
 
 | Command | Description |
 |---|---|
-| `./install.sh` | Install and prompt for a profile |
+| `./install.sh` | Install and prompt for a profile on Fedora |
 | `./install.sh --list` | List available modules and package counts |
 | `./install.sh --dry-run` | Preview installation changes |
 | `./install.sh --module NAME` | Install selected modules |
 | `./install.sh --no-dotfiles` | Skip dotfile setup |
+| `./install.sh --yes` | Skip the macOS plan confirmation |
+| `./install.sh --non-interactive` | Never prompt; implies `--yes` and uses environment/global settings |
 | `./scripts/update.sh` | Update packages and runtimes |
 | `./scripts/doctor.sh` | Check the installation |
 | `./scripts/backup.sh` | Back up managed dotfiles |
@@ -61,33 +91,55 @@ Profile membership is defined in `config/profiles.conf`.
 
 ## Customization
 
-Most of the setup can be customized through the configuration files:
-
-- Add or remove packages in `modules/<name>/packages.fedora`.
-- Add modules in `config/modules.conf` and configure profile membership in `config/profiles.conf`.
-- Change pinned versions in `config/pins.conf` and `config/runtimes.conf`.
+- Add Fedora packages in `modules/<name>/packages.fedora`.
+- Add macOS formulae and casks in `modules/<name>/packages.macos`.
+- Add modules in `config/modules.conf` and configure profile membership in
+  `config/profiles.conf`.
+- Change pinned versions in `config/pins.conf`, `config/runtimes.conf`, and
+  `config/runtimes.macos.conf`.
 - Manage dotfiles through `dotfiles/manifest.tsv`.
-- Configure optional database and virtualization services in `config/settings.conf`.
+- Configure database, virtualization, and Podman machine behavior in
+  `config/settings.conf`.
 
-The extended profile installs optional desktop applications automatically. Direct `--module` installations use `INSTALL_OPTIONAL_APPS` to control them.
+The extended profile installs optional desktop applications automatically.
+Direct `--module` installations use `INSTALL_OPTIONAL_APPS` to control them.
 
-See [customization](docs/customization.md) and [troubleshooting](docs/troubleshooting.md) for more details.
+See [customization](docs/customization.md), [macOS details](docs/macos.md), and
+[troubleshooting](docs/troubleshooting.md) for more details.
 
 ## After installation
 
-The installer offers to restart at the end of an interactive run. If you skip it, log out and back in for changes to your login shell, fonts, and session environment to take effect.
+On both platforms the installer prompts for your Git/GitHub identity: the name
+and email used for commits. They are stored in `~/.gitconfig.local` and included
+by the managed `.gitconfig`.
 
-The installer also prompts for your Git name and email, which are stored in `~/.gitconfig.local` and included by the managed `.gitconfig`.
+Fedora offers to restart at the end of an interactive run. If you skip it, log
+out and back in for changes to your login shell, fonts, and session environment
+to take effect. macOS does not prompt for a restart; open a new terminal to load
+the shell configuration and fonts.
 
-For non-interactive installations, set:
+For non-interactive installs, provide the identity through the environment:
 
-    DEV_SETUP_GIT_NAME="Your Name"
-    DEV_SETUP_GIT_EMAIL="you@example.com"
+```bash
+DEV_SETUP_GIT_NAME="Your Name" \
+DEV_SETUP_GIT_EMAIL="you@example.com" \
+./install.sh --profile core --non-interactive
+```
 
-You can also configure these manually:
+You can also configure it manually:
 
-    git config --file ~/.gitconfig.local user.name "Your Name"
-    git config --file ~/.gitconfig.local user.email "you@example.com"
+```bash
+git config --file ~/.gitconfig.local user.name "Your Name"
+git config --file ~/.gitconfig.local user.email "you@example.com"
+```
+
+## Tests
+
+```bash
+./tests/macos.sh        # macOS arm64 suite
+./tests/portability.sh  # shared helper and manifest checks
+./tests/security.sh     # Fedora security regression suite
+```
 
 ## License
 

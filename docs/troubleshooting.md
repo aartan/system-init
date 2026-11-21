@@ -23,11 +23,102 @@ Run the checks directly:
 
 Common causes:
 
-- A required command is missing (`curl`, `tar`, `sha256sum`, `git`).
+- A required command is missing (`curl`, `tar`, `shasum` on macOS, `sha256sum` on Fedora, and `git`).
 - A package manifest row has the wrong number of fields or an unknown flag.
 - A dotfile source is missing or resolves outside the repository.
 - The repository contains a forbidden sensitive path.
-- The Fedora release is older than 43 or the architecture is unsupported.
+- Fedora is older than 43, macOS is older than 27, or the architecture is
+  unsupported. macOS requires Apple Silicon.
+
+## macOS: Homebrew bootstrap verification fails
+
+The installer refuses to execute the Homebrew installer unless all three checks
+pass:
+
+- the commit matches `HOMEBREW_INSTALL_COMMIT` in `config/pins.conf`;
+- GitHub reports that commit's signature as verified;
+- the downloaded file matches `HOMEBREW_INSTALL_SHA256`.
+
+Retry with network access, or update both pins together after independently
+reviewing a new upstream installer commit. Never bypass the checksum.
+
+## macOS: Bash 3.2 is detected
+
+macOS ships Bash 3.2 at `/bin/bash`. system-init installs the Homebrew `bash`
+formula and re-executes itself under Bash 5. If the installer stops after
+mentioning Bash 5, install it manually and rerun:
+
+```bash
+brew install bash
+/opt/homebrew/bin/bash ./install.sh
+```
+
+The system `/bin/bash` is never replaced.
+
+## macOS: Podman machine is missing or stopped
+
+Check the machine state:
+
+```bash
+podman machine list
+podman machine start default
+podman info
+```
+
+With `PODMAN_MACHINE_AUTO=1` (the default), the installer creates a machine when
+none exists and starts a stopped one. If `podman machine init` fails, confirm
+that Apple Hypervisor is available:
+
+```bash
+sysctl -n kern.hv_support
+```
+
+Set `PODMAN_MACHINE_AUTO=0` to manage machines manually.
+
+## macOS: Alacritty reports a disabled Homebrew cask
+
+Homebrew disables the `alacritty` cask because the upstream app is ad-hoc
+signed and fails its Gatekeeper audit. system-init does not bypass that check;
+it downloads the official release DMG instead, verifies the pinned SHA-256, and
+installs `Alacritty.app`.
+
+Check the installed version:
+
+```bash
+/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' \
+  /Applications/Alacritty.app/Contents/Info.plist
+```
+
+Rerun the terminal module after updating `ALACRITTY_VERSION` and
+`ALACRITTY_DMG_SHA256` in `config/pins.conf`:
+
+```bash
+./install.sh --module terminal
+```
+
+## macOS: Postgres.app does not start
+
+Open it once from Finder or run:
+
+```bash
+open -a Postgres.app
+/Applications/Postgres.app/Contents/Versions/latest/bin/pg_isready
+```
+
+If macOS blocks the app, allow it in System Settings > Privacy & Security.
+system-init never disables Gatekeeper and never deletes Postgres.app data.
+
+## macOS: the login shell did not change
+
+The installer uses the system zsh and does not edit `/etc/shells`:
+
+```bash
+dscl . -read "/Users/$USER" UserShell
+chsh -s /bin/zsh "$USER"
+exec zsh
+```
+
+macOS may ask for your password when changing your own login shell.
 
 ## DNF repository errors
 
@@ -102,7 +193,8 @@ directory before checking its `old` file.
 Check the login shell recorded by the system:
 
 ```bash
-getent passwd "$USER"
+getent passwd "$USER"          # Fedora
+dscl . -read "/Users/$USER" UserShell   # macOS
 echo "$SHELL"
 ```
 
@@ -113,8 +205,8 @@ shell changes. Log out and back in, or run:
 exec zsh
 ```
 
-Alacritty is configured to start `/usr/bin/zsh` directly. Other terminal
-emulators may need a new login session.
+Alacritty is configured to start `/bin/zsh` directly. Other terminal emulators
+may need a new login session.
 
 ## zsh starts slowly or shows a Powerlevel10k warning
 
@@ -122,9 +214,10 @@ emulators may need a new login session.
 zsh -lic 'exit'
 ```
 
-The managed `.zshrc` loads Oh My Zsh, Powerlevel10k, and mise when available. If
-a local file is blocking startup, inspect the first error without editing the
-repository copies.
+The managed `.zshrc` loads Oh My Zsh, Powerlevel10k, and mise on both Fedora and
+macOS. macOS uses the same `.p10k.zsh` with the native Apple OS icon. If a local
+file is blocking startup, inspect the first error without editing the repository
+copies.
 
 If mise was just installed and `node` is missing in the current shell:
 
@@ -138,30 +231,42 @@ mise exec -- node --version
 
 ```bash
 ~/.local/bin/mise --version
-~/.local/bin/mise use --global node@26.13.0
+~/.local/bin/mise use --global node@26.13.1
 ~/.local/bin/mise doctor
 ```
 
-Pins live in `config/runtimes.conf`. Update the explicit version and rerun
-`./install.sh --module development` or `./scripts/update.sh`.
+Fedora pins live in `config/runtimes.conf`; macOS pins live in
+`config/runtimes.macos.conf` and contain Node.js LTS only. Update the explicit
+version and rerun `./install.sh --module development` or
+`./scripts/update.sh`.
 
 ## Fonts are not visible
+
+Fedora:
 
 ```bash
 fc-match "JetBrainsMono Nerd Font"
 ls ~/.local/share/fonts/JetBrainsMono | head
+fc-cache -f ~/.local/share/fonts/JetBrainsMono
+```
+
+macOS:
+
+```bash
+ls ~/Library/Fonts/JetBrainsMonoNerdFont-Regular.ttf
 ```
 
 If the directory is missing:
 
 ```bash
 ./install.sh --module fonts
-fc-cache -f ~/.local/share/fonts/JetBrainsMono
 ```
 
 Log out and back in if the terminal was already open.
 
 ## PostgreSQL or Valkey is not running
+
+Fedora:
 
 ```bash
 systemctl status postgresql.service
@@ -170,11 +275,22 @@ sudo journalctl -u postgresql.service -n 50
 sudo journalctl -u valkey.service -n 50
 ```
 
-The installer initializes the PostgreSQL cluster only when
+macOS:
+
+```bash
+open -a Postgres.app
+/Applications/Postgres.app/Contents/Versions/latest/bin/pg_isready
+brew services list
+```
+
+On Fedora the installer initializes the PostgreSQL cluster only when
 `/var/lib/pgsql/data/PG_VERSION` is absent. It does not change authentication,
-passwords, or `pg_hba.conf`.
+passwords, or `pg_hba.conf`. On macOS, PostgreSQL is managed by Postgres.app and
+Valkey by Homebrew services.
 
 ## Virtual machines cannot start
+
+Fedora:
 
 ```bash
 ls -l /dev/kvm
@@ -182,8 +298,17 @@ systemctl is-active virtqemud.socket virtnetworkd.socket virtstoraged.socket vir
 virsh -c qemu:///system net-list --all
 ```
 
-If `/dev/kvm` is missing, enable AMD-V or Intel VT-x in firmware. The legacy
-`libvirtd.service` is not enabled; the installer uses modular libvirt sockets.
+macOS:
+
+```bash
+sysctl -n kern.hv_support
+open -a UTM
+```
+
+If `/dev/kvm` is missing on Fedora, enable AMD-V or Intel VT-x in firmware. The
+legacy `libvirtd.service` is not enabled; the installer uses modular libvirt
+sockets. On macOS, UTM uses Apple's Hypervisor framework; `kern.hv_support`
+must return `1` for hardware acceleration.
 
 ## An installation was interrupted
 
