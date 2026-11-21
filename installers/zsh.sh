@@ -11,7 +11,11 @@ OMZ_DIR="${TARGET_HOME}/.oh-my-zsh"
 P10K_DIR="$OMZ_DIR/custom/themes/powerlevel10k"
 HISTORY_SUBSTRING_DIR="$OMZ_DIR/custom/plugins/history-substring-search"
 
-ZSH_TARGET_BIN=/usr/bin/zsh
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  ZSH_TARGET_BIN=/bin/zsh
+else
+  ZSH_TARGET_BIN=/usr/bin/zsh
+fi
 
 # Git is always invoked through git_safe (lib/common.sh), which disables
 # repository-local fsmonitor, untracked-cache and hook execution.
@@ -109,7 +113,7 @@ zsh_set_login_shell() {
     return 1
   fi
 
-  current_shell="$(getent -- passwd "$TARGET_USER" | awk -F: '{ print $7 }')"
+  current_shell="$(user_login_shell "$TARGET_USER" 2>/dev/null || true)"
 
   if [[ "$current_shell" == "$ZSH_TARGET_BIN" ]]; then
     log_debug "Login shell is already $ZSH_TARGET_BIN"
@@ -117,12 +121,23 @@ zsh_set_login_shell() {
   fi
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    log_dry "sudo chsh -s $ZSH_TARGET_BIN $TARGET_USER"
+    if [[ "${PLATFORM:-fedora}" == "macos" ]]; then
+      log_dry "chsh -s $ZSH_TARGET_BIN $TARGET_USER"
+    else
+      log_dry "sudo chsh -s $ZSH_TARGET_BIN $TARGET_USER"
+    fi
     return 0
   fi
 
   if have_command chsh; then
-    if ! run_sudo chsh -s "$ZSH_TARGET_BIN" "$TARGET_USER"; then
+    if [[ "${PLATFORM:-fedora}" == "macos" ]]; then
+      # The system zsh is already registered; change only this user's shell
+      # and do not modify /etc/shells or /bin/bash.
+      if ! chsh -s "$ZSH_TARGET_BIN" "$TARGET_USER"; then
+        record_failure "Failed to change the login shell for $TARGET_USER to $ZSH_TARGET_BIN"
+        return 1
+      fi
+    elif ! run_sudo chsh -s "$ZSH_TARGET_BIN" "$TARGET_USER"; then
       record_failure "Failed to change the login shell for $TARGET_USER to $ZSH_TARGET_BIN"
       return 1
     fi
@@ -136,7 +151,7 @@ zsh_set_login_shell() {
     return 1
   fi
 
-  current_shell="$(getent -- passwd "$TARGET_USER" | awk -F: '{ print $7 }')"
+  current_shell="$(user_login_shell "$TARGET_USER" 2>/dev/null || true)"
   if [[ "$current_shell" != "$ZSH_TARGET_BIN" ]]; then
     record_failure "Login shell for $TARGET_USER is ${current_shell:-unknown}, expected $ZSH_TARGET_BIN."
     return 1
