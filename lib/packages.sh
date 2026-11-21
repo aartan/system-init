@@ -159,6 +159,18 @@ packages_install_module() {
     fi
   fi
 
+  if (( ${#brew_required[@]} > 0 )); then
+    if ! brew_install "${brew_required[@]}"; then
+      record_failure "Failed to install required Homebrew formulae for module '$module'."
+    fi
+  fi
+
+  if (( ${#cask_required[@]} > 0 )); then
+    if ! brew_cask_install "${cask_required[@]}"; then
+      record_failure "Failed to install required Homebrew casks for module '$module'."
+    fi
+  fi
+
   if packages_optional_apps_enabled; then
     if (( ${#dnf_optional[@]} > 0 )); then
       if ! dnf_install "${dnf_optional[@]}"; then

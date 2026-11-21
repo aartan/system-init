@@ -5,13 +5,11 @@
 module_post_install() {
   if [[ "$ENABLE_VIRTUALIZATION_SERVICES" != "1" ]]; then
     log_info "Virtualization service enablement is disabled in config/settings.conf."
+    report_skipped "virtualization services"
     return 0
   fi
 
-  if [[ "$DRY_RUN" != "1" && ! -e /dev/kvm ]]; then
-    record_warning "/dev/kvm is missing. Enable AMD-V/Intel VT-x in firmware for KVM acceleration."
-  fi
-
-  fedora_libvirt_sockets_enable || return 1
-  fedora_libvirt_network_check
+  virtualization_accel_check
+  virtualization_services_enable || return 1
+  virtualization_network_check
 }

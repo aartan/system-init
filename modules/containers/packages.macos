@@ -1,0 +1,4 @@
+cask podman-desktop
+brew podman
+brew podman-compose
+brew skopeo

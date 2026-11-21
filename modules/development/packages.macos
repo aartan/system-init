@@ -1,0 +1,2 @@
+# mise installs the pinned Node.js LTS runtime; there are no Homebrew runtime
+# packages for this module on macOS.

@@ -1,0 +1,3 @@
+cask postgres-app
+cask dbeaver-community
+brew valkey

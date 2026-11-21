@@ -1,0 +1,19 @@
+# macOS core tools. Homebrew bash provides the Bash 5 runtime required by
+# system-init; the system /bin/bash is Bash 3.2 and is not replaced.
+brew bash
+brew git
+brew git-lfs
+brew curl
+brew wget
+brew jq
+brew zip
+brew unzip
+brew xz
+brew gzip
+brew gnupg
+brew openssl@3
+brew make
+brew cmake
+brew ninja
+brew pkgconf
+brew shellcheck

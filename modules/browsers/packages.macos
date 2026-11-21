@@ -1,0 +1,3 @@
+# Firefox is intentionally not installed on macOS.
+cask brave-browser
+cask google-chrome

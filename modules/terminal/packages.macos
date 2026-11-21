@@ -1,0 +1,14 @@
+brew tmux
+brew fzf
+brew ripgrep
+brew fd
+brew bat
+brew eza
+brew btop
+brew nmap
+brew zoxide
+brew lazygit
+brew zsh-autosuggestions
+brew zsh-syntax-highlighting
+# Alacritty is installed from the official pinned DMG by installers/alacritty.sh
+# because Homebrew disables the cask after its Gatekeeper audit.

@@ -5,9 +5,10 @@
 module_post_install() {
   if [[ "$ENABLE_DATABASE_SERVICES" != "1" ]]; then
     log_info "Database service enablement is disabled in config/settings.conf."
+    report_skipped "database services"
     return 0
   fi
 
-  fedora_postgresql_enable || return 1
-  fedora_valkey_enable || return 1
+  database_postgresql_enable || return 1
+  database_valkey_enable || return 1
 }
