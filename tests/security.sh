@@ -11,6 +11,13 @@ if (( EUID == 0 )); then
   exit 1
 fi
 
+# This suite exercises Fedora/GNU-specific behaviour (findmnt, /proc, getent,
+# systemd units, GNU coreutils). Run the macOS suite on Apple Silicon.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  printf 'skip - tests/security.sh targets Fedora; run ./tests/macos.sh on macOS.\n'
+  exit 0
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 ACTUAL_REPO="$ROOT"
 TEST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/system-init-tests.XXXXXXXX")"
