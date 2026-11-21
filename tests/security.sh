@@ -179,12 +179,16 @@ source "$ROOT/installers/dnf.sh"
 source "$ROOT/installers/flatpak.sh"
 # shellcheck source=../installers/mise.sh
 source "$ROOT/installers/mise.sh"
+# shellcheck source=../installers/fonts.sh
+source "$ROOT/installers/fonts.sh"
 # shellcheck source=../installers/code.sh
 source "$ROOT/installers/code.sh"
 # shellcheck source=../installers/zsh.sh
 source "$ROOT/installers/zsh.sh"
 # shellcheck source=../platforms/fedora/packages.sh
 source "$ROOT/platforms/fedora/packages.sh"
+# shellcheck source=../platforms/fedora/system.sh
+source "$ROOT/platforms/fedora/system.sh"
 
 PLATFORM=fedora
 PLATFORM_NAME="Fedora Linux"
@@ -1003,12 +1007,17 @@ CAPTURE="$TEST_TMP/m2-capture"
 ORIGINAL_RUN_SUDO="$(declare -f run_sudo)"
 ORIGINAL_DNF_INSTALLED="$(declare -f dnf_package_installed)"
 ORIGINAL_FLATPAK_INSTALLED="$(declare -f flatpak_package_installed)"
+ORIGINAL_FLATPAK_REMOTE_ENSURE="$(declare -f flatpak_remote_ensure)"
 run_sudo() {
-  printf '%s\n' "$@" >"$CAPTURE"
+  printf '%s\n' "$@" >>"$CAPTURE"
   return 0
 }
 dnf_package_installed() { return 1; }
 flatpak_package_installed() { return 1; }
+flatpak_remote_ensure() {
+  printf 'remote-ensure\n' >>"$CAPTURE"
+  return 0
+}
 FLATPAK_REMOTE=flathub
 
 rm -f -- "$CAPTURE"
@@ -1016,6 +1025,25 @@ check "dnf_install accepts a normal package" dnf_install goodpkg
 captured="$(cat "$CAPTURE" 2>/dev/null || true)"
 expect_match "dnf_install passes -- before packages" $'(^|\n)install\n-y\n--\ngoodpkg($|\n)' "$captured"
 
+dnf_package_installed() { return 0; }
+rm -f -- "$CAPTURE"
+check "dnf_install skips already installed packages" dnf_install goodpkg
+[[ ! -e "$CAPTURE" ]] && pass "dnf_install did not invoke sudo when everything is installed" \
+  || fail "dnf_install invoked sudo for an installed package"
+
+dnf_package_installed() { [[ "$1" == installedpkg ]]; }
+rm -f -- "$CAPTURE"
+check "dnf_install installs only missing packages" dnf_install installedpkg missingpkg
+captured="$(cat "$CAPTURE" 2>/dev/null || true)"
+expect_match "installed DNF package is omitted from the install list" \
+  $'(^|\n)install\n-y\n--\nmissingpkg($|\n)' "$captured"
+if [[ "$captured" == *installedpkg* ]]; then
+  fail "dnf_install included an installed package"
+else
+  pass "dnf_install included only missing packages"
+fi
+
+dnf_package_installed() { return 1; }
 rm -f -- "$CAPTURE"
 expect_failure "dnf_install rejects an option-like package" dnf_install --installroot=/
 [[ ! -e "$CAPTURE" ]] && pass "dnf_install did not invoke sudo for an invalid token" || fail "dnf_install invoked sudo for an invalid token"
@@ -1023,7 +1051,15 @@ expect_failure "dnf_install rejects an option-like package" dnf_install --instal
 rm -f -- "$CAPTURE"
 check "flatpak_install accepts a normal application" flatpak_install org.example.App
 captured="$(cat "$CAPTURE" 2>/dev/null || true)"
-expect_match "flatpak_install passes -- before applications" $'(^|\n)install\n--system\n-y\n--noninteractive\nflathub\n--\norg.example.App($|\n)' "$captured"
+expect_match "flatpak_install ensures the remote before installing" \
+  $'(^|\n)remote-ensure\nflatpak\ninstall\n--system\n-y\n--noninteractive\nflathub\n--\norg\.example\.App($|\n)' "$captured"
+
+flatpak_package_installed() { return 0; }
+rm -f -- "$CAPTURE"
+check "flatpak_install skips already installed applications" flatpak_install org.example.App
+[[ ! -e "$CAPTURE" ]] && pass "flatpak_install did not invoke sudo when everything is installed" \
+  || fail "flatpak_install invoked sudo for an installed application"
+flatpak_package_installed() { return 1; }
 
 rm -f -- "$CAPTURE"
 expect_failure "flatpak_install rejects an option-like application" flatpak_install -x
@@ -1033,6 +1069,7 @@ rm -f -- "$CAPTURE"
 expect_failure "flatpak_remove rejects an option-like application" flatpak_remove --user
 [[ ! -e "$CAPTURE" ]] && pass "flatpak_remove did not invoke sudo for an invalid token" || fail "flatpak_remove invoked sudo for an invalid token"
 
+eval "$ORIGINAL_FLATPAK_REMOTE_ENSURE"
 FLATPAK_REMOTE=flathub
 FLATPAK_REPO_URL="http://dl.flathub.org/repo/"
 rm -f -- "$CAPTURE"
@@ -3243,6 +3280,173 @@ printf '.zshrc\tfile\t0\t%s\t0644\tfiles/.zshrc\t-\n' "$empty_sha" >>"$unsafe_mo
 printf 'created=test\ncomplete=1\n' >"$unsafe_mode/metadata.conf"
 expect_failure "F-17: permissive 0644 manifest mode is rejected" \
   backup_v2_manifest_validate "$unsafe_mode"
+
+# ---------------------------------------------------------------------------
+# Idempotency regressions
+# ---------------------------------------------------------------------------
+note "# Idempotency"
+
+# A completed font installation is recognised only when every recorded payload
+# is still present with the expected hash.
+font_saved_dir="$FONT_DIR"
+font_saved_regular="$FONT_REGULAR"
+font_saved_manifest="$FONT_MANIFEST"
+font_saved_version="$NERD_FONTS_VERSION"
+font_saved_sha="$NERD_FONTS_FONT_SHA256"
+FONT_DIR="$TEST_TMP/font-idempotency"
+mkdir -p "$FONT_DIR"
+FONT_REGULAR="$FONT_DIR/JetBrainsMonoNerdFont-Regular.ttf"
+FONT_MANIFEST="$FONT_DIR/.system-init-fonts.tsv"
+NERD_FONTS_VERSION="test-version"
+printf 'regular\n' >"$FONT_REGULAR"
+printf 'extra\n' >"$FONT_DIR/extra.ttf"
+NERD_FONTS_FONT_SHA256="$(file_sha256 "$FONT_REGULAR")"
+check "font completion manifest records every payload" \
+  fonts_write_manifest JetBrainsMonoNerdFont-Regular.ttf extra.ttf
+check "font installation is complete when every payload matches" fonts_verify_installed
+rm -f -- "$FONT_DIR/extra.ttf"
+expect_failure "a missing font payload invalidates the completion manifest" fonts_verify_installed
+rm -f -- "$FONT_MANIFEST"
+expect_failure "a missing font completion manifest forces a reinstall" fonts_verify_installed
+FONT_DIR="$font_saved_dir"
+FONT_REGULAR="$font_saved_regular"
+FONT_MANIFEST="$font_saved_manifest"
+NERD_FONTS_VERSION="$font_saved_version"
+NERD_FONTS_FONT_SHA256="$font_saved_sha"
+
+# mise completion markers and runtime inspection.
+mise_saved_marker="$MISE_MARKER"
+mise_saved_version="$MISE_VERSION"
+MISE_MARKER="$TEST_TMP/mise-idempotency-marker"
+MISE_VERSION="test-version"
+printf '%s\n' "$MISE_VERSION" >"$MISE_MARKER"
+check "mise completion marker makes a matching binary complete" mise_install_complete
+rm -f -- "$MISE_MARKER"
+expect_failure "a missing mise completion marker forces a reinstall" mise_install_complete
+
+ORIGINAL_MISE_RUN="$(declare -f mise_run)"
+mise_run() {
+  case "$*" in
+    "ls --installed --no-header node"|"ls --global --no-header node")
+      printf 'node  26.13.1  ~/.config/mise/config.toml  26.13.1\n'
+      ;;
+    *) return 1 ;;
+  esac
+}
+check "mise runtime is current when installed and pinned" \
+  mise_runtime_is_current node 26.13.1
+expect_failure "mise runtime is not current for a different version" \
+  mise_runtime_is_current node 26.13.0
+mise_run() {
+  case "$*" in
+    "ls --installed --no-header node")
+      printf 'node  26.13.1  ~/.config/mise/config.toml  26.13.1\n'
+      ;;
+    "ls --global --no-header node")
+      printf 'node  26.13.1  ~/.config/mise/config.toml  26.13\n'
+      ;;
+    *) return 1 ;;
+  esac
+}
+expect_failure "mise runtime is not current while the global pin is fuzzy" \
+  mise_runtime_is_current node 26.13.1
+eval "$ORIGINAL_MISE_RUN"
+MISE_MARKER="$mise_saved_marker"
+MISE_VERSION="$mise_saved_version"
+
+# A second dotfile pass must not create a backup for an already managed target.
+rem_setup
+SELECTED_MODULES=(core)
+check "dotfile install links a new target" \
+  dotfiles_install_one core symlink dotfiles/home/.gitconfig .gitconfig
+backup_count_before="$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d '[:space:]')"
+check "unchanged dotfile backup scan succeeds" backup_dotfile_targets
+backup_count_after="$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d '[:space:]')"
+expect_eq "unchanged dotfiles create no backup snapshot" \
+  "$backup_count_before" "$backup_count_after"
+check "second dotfile install is a no-op" \
+  dotfiles_install_one core symlink dotfiles/home/.gitconfig .gitconfig
+backup_count_after="$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d '[:space:]')"
+expect_eq "second dotfile install creates no backup" \
+  "$backup_count_before" "$backup_count_after"
+SELECTED_MODULES=()
+
+# Already installed VS Code extensions must not be reinstalled.
+ORIGINAL_HAVE_COMMAND="$(declare -f have_command)"
+have_command() {
+  [[ "$1" == "code" ]] && return 0
+  command -v "$1" >/dev/null 2>&1
+}
+code() {
+  case "$*" in
+    "--list-extensions --show-versions")
+      printf '%s\n' "${VSCODE_EXTENSIONS[@]}"
+      ;;
+    *)
+      printf 'install %s\n' "$*" >>"$TEST_TMP/code-idempotency-calls"
+      ;;
+  esac
+}
+rm -f -- "$TEST_TMP/code-idempotency-calls"
+check "installed VS Code extensions are skipped" code_extensions_install
+[[ ! -e "$TEST_TMP/code-idempotency-calls" ]] \
+  && pass "VS Code extension install was not invoked" \
+  || fail "VS Code extension install was invoked for an installed version"
+eval "$ORIGINAL_HAVE_COMMAND"
+unset -f code
+
+# libvirt network state must converge even when the network is already active.
+ORIGINAL_LIBVIRT_RUN_SUDO="$(declare -f run_sudo)"
+LIBVIRT_CALLS="$TEST_TMP/libvirt-idempotency-calls"
+run_sudo() {
+  printf '%s\n' "$*" >>"$LIBVIRT_CALLS"
+  case "$*" in
+    *"net-list --all") printf ' Name   State    Autostart\n default active   no\n' ;;
+    *"net-info default") printf 'Name: default\nActive: yes\nAutostart: no\n' ;;
+  esac
+}
+DRY_RUN=0
+: >"$LIBVIRT_CALLS"
+check "libvirt check accepts an active default network" fedora_libvirt_network_check
+if grep -Fq 'net-autostart default' "$LIBVIRT_CALLS" \
+  && ! grep -Fq 'net-start default' "$LIBVIRT_CALLS"; then
+  pass "active libvirt network gets autostart without a redundant start"
+else
+  fail "active libvirt network did not converge to autostart"
+fi
+
+run_sudo() {
+  printf '%s\n' "$*" >>"$LIBVIRT_CALLS"
+  case "$*" in
+    *"net-list --all") printf ' Name   State      Autostart\n default inactive   no\n' ;;
+    *"net-info default") printf 'Name: default\nActive: no\nAutostart: no\n' ;;
+  esac
+}
+: >"$LIBVIRT_CALLS"
+check "libvirt check handles an inactive default network" fedora_libvirt_network_check
+if grep -Fq 'net-start default' "$LIBVIRT_CALLS" \
+  && grep -Fq 'net-autostart default' "$LIBVIRT_CALLS"; then
+  pass "inactive libvirt network is started and autostarted"
+else
+  fail "inactive libvirt network was not fully configured"
+fi
+
+run_sudo() {
+  printf '%s\n' "$*" >>"$LIBVIRT_CALLS"
+  case "$*" in
+    *"net-list --all") printf ' Name   State    Autostart\n default active   yes\n' ;;
+    *"net-info default") printf 'Name: default\nActive: yes\nAutostart: yes\n' ;;
+  esac
+}
+: >"$LIBVIRT_CALLS"
+check "libvirt check accepts a fully configured network" fedora_libvirt_network_check
+if ! grep -Fq 'net-start default' "$LIBVIRT_CALLS" \
+  && ! grep -Fq 'net-autostart default' "$LIBVIRT_CALLS"; then
+  pass "configured libvirt network is left alone"
+else
+  fail "configured libvirt network was changed"
+fi
+eval "$ORIGINAL_LIBVIRT_RUN_SUDO"
 
 # ---------------------------------------------------------------------------
 # Summary

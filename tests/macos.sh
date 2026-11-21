@@ -49,6 +49,25 @@ expect_eq() {
   fi
 }
 
+expect_match() {
+  local description="$1" pattern="$2" actual="$3"
+  if [[ "$actual" =~ $pattern ]]; then
+    pass "$description"
+  else
+    fail "$description (expected match for '$pattern', got '$actual')"
+  fi
+}
+
+expect_failure() {
+  local description="$1"
+  shift
+  if "$@" >/dev/null 2>&1; then
+    fail "$description (expected failure, got success)"
+  else
+    pass "$description"
+  fi
+}
+
 cleanup() {
   state_lock_release 2>/dev/null || true
   chmod -R u+rwX "$TEST_TMP" 2>/dev/null || true
@@ -189,6 +208,23 @@ if grep -q 'no macOS prompt is shown' "$ROOT/install.sh"; then
 else
   pass "macOS uses the same Git identity prompt as Fedora"
 fi
+if grep -Rq 'MACOS_DEFAULT_PROFILE' \
+  "$ROOT/install.sh" "$ROOT/lib/bootstrap.sh" "$ROOT/config/settings.conf"; then
+  fail "macOS still has a separate default profile"
+else
+  pass "macOS uses the shared core/extended profile default"
+fi
+if grep -q 'Select \[1/2\] (default 1)' "$ROOT/install.sh" \
+  && grep -q 'Select \[1/2\] (default 1)' "$ROOT/lib/bootstrap.sh"; then
+  pass "the shared profile prompt is used by the installer and bootstrap"
+else
+  fail "the shared profile prompt is missing"
+fi
+if grep -q 'install_confirm\|install_print_plan' "$ROOT/install.sh"; then
+  fail "macOS still has an installation-plan confirmation"
+else
+  pass "macOS no longer asks for a separate installation-plan confirmation"
+fi
 identity_file="$HOME/.gitconfig.local"
 git_identity_write_atomic "$identity_file" "Mac Test" "mac@example.invalid"
 if [[ "$(git_identity_config --file "$identity_file" --get user.name)" == "Mac Test" ]] \
@@ -215,6 +251,8 @@ fi
 
 CAPTURE="$TEST_TMP/package-calls"
 : >"$CAPTURE"
+ORIGINAL_BREW_INSTALL="$(declare -f brew_install)"
+ORIGINAL_BREW_CASK_INSTALL="$(declare -f brew_cask_install)"
 brew_install() { printf 'brew %s\n' "$*" >>"$CAPTURE"; }
 brew_cask_install() { printf 'cask %s\n' "$*" >>"$CAPTURE"; }
 SELECTED_MODULES=(core)
@@ -240,6 +278,110 @@ if grep -Fq 'firefox' "$CAPTURE"; then
 else
   pass "Firefox is excluded from the browser module"
 fi
+
+eval "$ORIGINAL_BREW_INSTALL"
+eval "$ORIGINAL_BREW_CASK_INSTALL"
+
+# ---------------------------------------------------------------------------
+# Idempotency
+# ---------------------------------------------------------------------------
+BREW_CAPTURE="$TEST_TMP/brew-idempotency"
+ORIGINAL_BREW_REQUIRE="$(declare -f brew_require)"
+ORIGINAL_BREW_PACKAGE_INSTALLED="$(declare -f brew_package_installed)"
+ORIGINAL_BREW_CASK_INSTALLED="$(declare -f brew_cask_installed)"
+brew_require() { return 0; }
+brew() { printf 'brew %s\n' "$*" >>"$BREW_CAPTURE"; }
+brew_package_installed() { return 0; }
+brew_cask_installed() { return 0; }
+
+rm -f -- "$BREW_CAPTURE"
+check "Homebrew formula install is skipped when already installed" brew_install git
+[[ ! -e "$BREW_CAPTURE" ]] \
+  && pass "installed Homebrew formula did not invoke brew" \
+  || fail "installed Homebrew formula invoked brew"
+
+brew_package_installed() { [[ "$1" == "git" ]]; }
+rm -f -- "$BREW_CAPTURE"
+check "Homebrew formula install processes only missing packages" brew_install git jq
+captured="$(cat "$BREW_CAPTURE" 2>/dev/null || true)"
+expect_match "missing Homebrew formula is installed" $'^brew install jq$' "$captured"
+if [[ "$captured" == *git* ]]; then
+  fail "Homebrew formula install included an installed package"
+else
+  pass "Homebrew formula install omitted the installed package"
+fi
+
+rm -f -- "$BREW_CAPTURE"
+check "Homebrew cask install is skipped when already installed" brew_cask_install visual-studio-code
+[[ ! -e "$BREW_CAPTURE" ]] \
+  && pass "installed Homebrew cask did not invoke brew" \
+  || fail "installed Homebrew cask invoked brew"
+
+brew_cask_installed() { [[ "$1" == "visual-studio-code" ]]; }
+rm -f -- "$BREW_CAPTURE"
+check "Homebrew cask install processes only missing casks" \
+  brew_cask_install visual-studio-code obsidian
+captured="$(cat "$BREW_CAPTURE" 2>/dev/null || true)"
+expect_match "missing Homebrew cask is installed" $'^brew install --cask obsidian$' "$captured"
+if [[ "$captured" == *visual-studio-code* ]]; then
+  fail "Homebrew cask install included an installed cask"
+else
+  pass "Homebrew cask install omitted the installed cask"
+fi
+
+eval "$ORIGINAL_BREW_REQUIRE"
+eval "$ORIGINAL_BREW_PACKAGE_INSTALLED"
+eval "$ORIGINAL_BREW_CASK_INSTALLED"
+unset -f brew
+
+ORIGINAL_BREW_SERVICE_STARTED="$(declare -f macos_brew_service_started)"
+macos_brew_service_started() { return 0; }
+brew() { printf 'brew %s\n' "$*" >>"$BREW_CAPTURE"; }
+rm -f -- "$BREW_CAPTURE"
+check "started Homebrew service is left alone" macos_brew_service_start valkey
+[[ ! -e "$BREW_CAPTURE" ]] \
+  && pass "started Homebrew service did not invoke brew services" \
+  || fail "started Homebrew service was restarted"
+eval "$ORIGINAL_BREW_SERVICE_STARTED"
+unset -f brew
+
+font_saved_dir="$FONT_DIR"
+font_saved_regular="$FONT_REGULAR"
+font_saved_manifest="$FONT_MANIFEST"
+font_saved_version="$NERD_FONTS_VERSION"
+font_saved_sha="$NERD_FONTS_FONT_SHA256"
+FONT_DIR="$TEST_TMP/font-idempotency"
+mkdir -p "$FONT_DIR"
+FONT_REGULAR="$FONT_DIR/JetBrainsMonoNerdFont-Regular.ttf"
+FONT_MANIFEST="$FONT_DIR/.system-init-fonts.tsv"
+NERD_FONTS_VERSION="test-version"
+printf 'regular\n' >"$FONT_REGULAR"
+printf 'extra\n' >"$FONT_DIR/extra.ttf"
+NERD_FONTS_FONT_SHA256="$(file_sha256 "$FONT_REGULAR")"
+check "font manifest records every installed payload" \
+  fonts_write_manifest JetBrainsMonoNerdFont-Regular.ttf extra.ttf
+check "complete font installation is skipped" fonts_verify_installed
+rm -f -- "$FONT_DIR/extra.ttf"
+expect_failure "missing font payload forces a reinstall" fonts_verify_installed
+FONT_DIR="$font_saved_dir"
+FONT_REGULAR="$font_saved_regular"
+FONT_MANIFEST="$font_saved_manifest"
+NERD_FONTS_VERSION="$font_saved_version"
+NERD_FONTS_FONT_SHA256="$font_saved_sha"
+
+ORIGINAL_MISE_RUN="$(declare -f mise_run)"
+mise_run() {
+  case "$*" in
+    "ls --installed --no-header node"|"ls --global --no-header node")
+      printf 'node  26.13.1  ~/.config/mise/config.toml  26.13.1\n'
+      ;;
+    *) return 1 ;;
+  esac
+}
+check "current mise runtime is detected" mise_runtime_is_current node 26.13.1
+expect_failure "a different mise runtime version is not current" \
+  mise_runtime_is_current node 26.13.0
+eval "$ORIGINAL_MISE_RUN"
 
 # ---------------------------------------------------------------------------
 # Podman machine handling
@@ -374,8 +516,13 @@ DRY_RUN=0
 # Dry-run installer
 # ---------------------------------------------------------------------------
 if [[ -x "$BREW_BIN" ]] && [[ -x /opt/homebrew/bin/bash ]]; then
-  if "$ROOT/install.sh" --dry-run --profile core --yes >"$TEST_TMP/dry-run.log" 2>&1; then
-    pass "install.sh dry-run completes for the core profile"
+  if "$ROOT/install.sh" --dry-run --non-interactive >"$TEST_TMP/dry-run.log" 2>&1; then
+    if grep -q 'Non-interactive run; using the core profile' "$TEST_TMP/dry-run.log" \
+      && grep -q 'Profile: core' "$TEST_TMP/dry-run.log"; then
+      pass "install.sh dry-run defaults to the core profile on macOS"
+    else
+      fail "install.sh did not report the core profile"
+    fi
   else
     fail "install.sh dry-run failed (see $TEST_TMP/dry-run.log)"
     sed -n '1,80p' "$TEST_TMP/dry-run.log"
