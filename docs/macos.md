@@ -35,7 +35,8 @@ not installed.
 ## Requirements
 
 - macOS 27 or newer on Apple Silicon (`arm64`).
-- An interactive terminal for the one-time plan confirmation.
+- An interactive terminal for the profile and Git identity prompts, plus the
+  one-time Homebrew/Bash confirmation if prerequisites are missing.
 - Network access for Homebrew, mise, and pinned downloads.
 - Homebrew is installed automatically if missing. If it is already present, it
   must be at `/opt/homebrew`.
@@ -49,21 +50,20 @@ prompts. system-init does not bypass those prompts and never runs Homebrew with
 ```bash
 git clone <repository-url>
 cd system-init
-./install.sh --dry-run --profile extended
+./install.sh --dry-run
 ./install.sh
 ./scripts/doctor.sh
 ```
 
-macOS defaults to the `extended` profile and does not ask you to choose a
-profile. Use `--profile core` for the minimal development set. A normal
-interactive run asks once for confirmation of the complete plan. `--yes` skips
-that confirmation; `--non-interactive` skips every prompt and uses the
-environment or existing global configuration for the profile and Git identity.
+Like Fedora, an interactive macOS run prompts for the `core` or `extended`
+profile and defaults to `core`. Use `--profile extended` for the full
+workstation set. `--non-interactive` skips every prompt, uses `core` unless
+`--profile` is supplied, and reads or reuses the existing Git identity.
 
-Like Fedora, the installer prompts for your Git/GitHub identity name and email
-and stores them in `~/.gitconfig.local`, which is included by the managed
-`.gitconfig`. Existing values, including your global Git configuration, are
-offered as defaults.
+The installer prompts for your Git/GitHub identity name and email and stores
+them in `~/.gitconfig.local`, which is included by the managed `.gitconfig`.
+Existing values, including your global Git configuration, are offered as
+defaults.
 
 For non-interactive installs:
 
@@ -85,6 +85,10 @@ When Homebrew is missing, system-init:
 5. Executes the verified file with `/bin/bash`, never `curl | bash`.
 6. Installs the Homebrew `bash` formula and re-executes the installer under
    Bash 5.
+
+On a fresh Mac, the bootstrap asks the same `core`/`extended` profile question
+and confirms the prerequisite installation plan once before making changes.
+The selected profile is reused by the main installer, so it is not asked twice.
 
 Verification failure stops the installation before anything is executed.
 Homebrew formulae and casks track the current Homebrew versions, matching the
@@ -122,7 +126,9 @@ service to configure.
 
 ## Shell
 
-- The login shell is `/bin/zsh`; `/etc/shells` is not modified.
+- macOS has used `/bin/zsh` as the default login shell since Catalina; macOS
+  27+ therefore already uses it. `/etc/shells` is not modified, and `chsh` only
+  runs if the account was explicitly changed to another shell.
 - Oh My Zsh provides plugins and is kept at the pinned commit.
 - `ZSH_THEME="powerlevel10k/powerlevel10k"` and `~/.p10k.zsh` is shared with
   Fedora. The p10k OS icon is left native, so macOS shows the Apple icon.
@@ -138,6 +144,15 @@ service to configure.
 The installer uses `/opt/homebrew/bin:/opt/homebrew/sbin` plus the system
 directories. Homebrew, mise, fonts, dotfiles, and the login shell are managed
 without root. macOS operations do not request `sudo` up front.
+
+## Re-running the installer
+
+Running `./install.sh` again is safe. Existing Homebrew formulae and casks,
+fonts, dotfiles, mise runtimes, Alacritty, the Podman machine, and configured
+services are detected and skipped. Components that failed previously are
+retried. A second run with no changes does not create a new dotfile backup
+snapshot. Switching from `extended` to `core` does not uninstall packages; use
+`./uninstall.sh --packages` for explicit removal.
 
 ## Updates and uninstall
 

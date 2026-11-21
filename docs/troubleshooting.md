@@ -134,6 +134,9 @@ Flatpak applications only produce warnings.
 
 ## Flatpak remote is missing
 
+The installer ensures an approved remote before any Flatpak install. If an
+existing remote has an unexpected URL, it refuses to overwrite it.
+
 ```bash
 flatpak remotes --system
 sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -141,8 +144,7 @@ sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flat
 
 Flatpak may display the configured remote as `https://dl.flathub.org/repo/`;
 both that repository URL and the official `.flatpakrepo` descriptors are
-accepted. The installer refuses unapproved URLs rather than replacing an
-existing remote. Then rerun the affected module.
+accepted. Then rerun the affected module.
 
 ## A dotfile is not linked
 

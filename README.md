@@ -23,7 +23,8 @@ Fedora:
 macOS:
 
 - macOS 27 on Apple Silicon
-- An interactive terminal for the one-time plan confirmation
+- An interactive terminal for the profile and Git identity prompts, plus the
+  one-time Homebrew/Bash confirmation if prerequisites are missing
 - Network access for Homebrew, mise, and pinned downloads
 - Homebrew at `/opt/homebrew`; it is installed automatically when missing
 
@@ -47,10 +48,12 @@ macOS:
 ```bash
 git clone <repository-url>
 cd system-init
-./install.sh --dry-run --profile extended
+./install.sh --dry-run
 ./install.sh
 ./scripts/doctor.sh
 ```
+
+Use `--profile extended` for the full workstation set on either platform.
 
 ## Profiles
 
@@ -59,9 +62,9 @@ cd system-init
 | `core` | CLI tools, shell, fonts, editors, containers, databases, runtimes, and required packages |
 | `extended` | Everything in core, plus browsers, productivity apps, virtualization, and optional desktop applications |
 
-On Fedora the installer prompts for a profile; non-interactive runs default to
-`core`. On macOS the default is `extended` and the profile prompt is skipped.
-Use `--profile core` for the minimal macOS set.
+On both platforms an interactive run prompts for a profile and defaults to
+`core`; non-interactive runs also use `core`. Use `--profile extended` for the
+full workstation set.
 
 You can also select a profile directly:
 
@@ -76,13 +79,13 @@ Profile membership is defined in `config/profiles.conf`.
 
 | Command | Description |
 |---|---|
-| `./install.sh` | Install and prompt for a profile on Fedora |
+| `./install.sh` | Install and prompt for a profile |
 | `./install.sh --list` | List available modules and package counts |
 | `./install.sh --dry-run` | Preview installation changes |
 | `./install.sh --module NAME` | Install selected modules |
 | `./install.sh --no-dotfiles` | Skip dotfile setup |
-| `./install.sh --yes` | Skip the macOS plan confirmation |
-| `./install.sh --non-interactive` | Never prompt; implies `--yes` and uses environment/global settings |
+| `./install.sh --yes` | Skip the one-time macOS Homebrew/Bash bootstrap confirmation |
+| `./install.sh --non-interactive` | Never prompt; implies `--yes`, defaults to `core`, and uses environment/global Git identity |
 | `./scripts/update.sh` | Update packages and runtimes |
 | `./scripts/doctor.sh` | Check the installation |
 | `./scripts/backup.sh` | Back up managed dotfiles |
@@ -115,8 +118,9 @@ by the managed `.gitconfig`.
 
 Fedora offers to restart at the end of an interactive run. If you skip it, log
 out and back in for changes to your login shell, fonts, and session environment
-to take effect. macOS does not prompt for a restart; open a new terminal to load
-the shell configuration and fonts.
+to take effect. macOS has used `/bin/zsh` as the default login shell since
+Catalina, so macOS 27+ already does. It does not prompt for a restart; open a
+new terminal to load the shell configuration and fonts.
 
 For non-interactive installs, provide the identity through the environment:
 
@@ -132,6 +136,16 @@ You can also configure it manually:
 git config --file ~/.gitconfig.local user.name "Your Name"
 git config --file ~/.gitconfig.local user.email "you@example.com"
 ```
+
+## Re-running the installer
+
+`./install.sh` is safe to run repeatedly on both platforms. It skips packages,
+applications, services, dotfiles, fonts, runtimes, and shell components that are
+already installed and current, and retries components that failed previously.
+A second run with no changes does not create a new dotfile backup snapshot.
+
+Changing profiles is additive: moving from `extended` to `core` does not remove
+packages. Use `./uninstall.sh --packages` for explicit removal.
 
 ## Tests
 
