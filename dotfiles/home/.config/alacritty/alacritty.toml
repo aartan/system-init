@@ -1,6 +1,6 @@
 
 [terminal.shell]
-program = "/usr/bin/zsh"
+program = "/bin/zsh"
 
 [font]
 size = 16.0

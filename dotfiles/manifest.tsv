@@ -8,4 +8,5 @@ terminal	symlink	all	dotfiles/home/.zshrc	.zshrc
 terminal	symlink	all	dotfiles/home/.p10k.zsh	.p10k.zsh
 terminal	symlink	all	dotfiles/home/.config/alacritty/alacritty.toml	.config/alacritty/alacritty.toml
 terminal	symlink	all	dotfiles/home/.config/btop/btop.conf	.config/btop/btop.conf
-editors	symlink	all	dotfiles/home/.config/Code/User/settings.json	.config/Code/User/settings.json
+editors	symlink	fedora	dotfiles/home/.config/Code/User/settings.json	.config/Code/User/settings.json
+editors	symlink	macos	dotfiles/home/.config/Code/User/settings.json	Library/Application Support/Code/User/settings.json

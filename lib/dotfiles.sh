@@ -19,6 +19,7 @@ DOTFILES_ALLOWED_TARGETS=(
   ".config/alacritty/alacritty.toml"
   ".config/btop/btop.conf"
   ".config/Code/User/settings.json"
+  "Library/Application Support/Code/User/settings.json"
 )
 
 # Additional files created or updated by the installer at an exact, known
@@ -38,6 +39,17 @@ dotfiles_target_allowed() {
   for allowed in "${DOTFILES_ALLOWED_TARGETS[@]}"; do
     [[ "$target" == "$allowed" ]] && return 0
   done
+
+  # Font conflicts are backed up by the fonts module. Only the exact pinned
+  # JetBrainsMono Nerd Font payloads are restorable.
+  case "$target" in
+    .local/share/fonts/JetBrainsMono/JetBrainsMonoNerdFont*.ttf|\
+    .local/share/fonts/JetBrainsMono/OFL.txt|\
+    .local/share/fonts/JetBrainsMono/README.md|\
+    Library/Fonts/JetBrainsMonoNerdFont*.ttf)
+      return 0
+      ;;
+  esac
   return 1
 }
 
@@ -66,9 +78,9 @@ dotfiles_target_rel_is_safe() {
     dotfiles_target_allowed "$target" || return 1
   fi
 
-  home_lexical="$(realpath -m -s -- "$TARGET_HOME" 2>/dev/null)" || return 1
+  home_lexical="$(path_lexical "$TARGET_HOME" 2>/dev/null)" || return 1
   home_canonical="$(target_home_resolve 2>/dev/null)" || return 1
-  target_lexical="$(realpath -m -s -- "$TARGET_HOME/$target" 2>/dev/null)" || return 1
+  target_lexical="$(path_lexical "$TARGET_HOME/$target" 2>/dev/null)" || return 1
 
   # Accept either the spelled home (possibly a symlink) or its canonical form.
   [[ "$target_lexical" == "$home_lexical"/* || "$target_lexical" == "$home_canonical"/* ]] || return 1
@@ -86,7 +98,7 @@ dotfiles_target_rel_is_safe() {
   path_has_symlink_component "$parent_lexical" "$parent_root" && return 1
 
   # Existing symlink components must not redirect the parent outside home.
-  parent_canonical="$(realpath -m -- "$parent_lexical" 2>/dev/null)" || return 1
+  parent_canonical="$(path_resolve "$parent_lexical" 2>/dev/null)" || return 1
   [[ "$parent_canonical" == "$home_canonical" || "$parent_canonical" == "$home_canonical"/* ]] || return 1
 
   return 0
@@ -170,7 +182,7 @@ dotfiles_row_valid() {
     _dotfiles_manifest_error "source escapes the repository: $source"
     return 1
   fi
-  if ! path_is_under "$(realpath -m -- "$REPO_ROOT/$source")" "$(realpath -m -- "$REPO_ROOT")"; then
+  if ! path_is_under "$(path_resolve "$REPO_ROOT/$source")" "$(path_resolve "$REPO_ROOT")"; then
     _dotfiles_manifest_error "source resolves outside the repository: $source"
     return 1
   fi
@@ -257,7 +269,7 @@ dotfiles_target_is_managed() {
   local target_abs="$2"
   [[ -L "$target_abs" ]] || return 1
   local resolved
-  resolved="$(readlink -f -- "$target_abs" 2>/dev/null || true)"
+  resolved="$(path_canonicalize "$target_abs" 2>/dev/null || true)"
   [[ "$resolved" == "$source_abs" ]]
 }
 
@@ -350,7 +362,7 @@ dotfiles_install_one() {
       return 1
     fi
   else
-    cp -a --no-dereference -- "$source_abs" "$target_abs" || return 1
+    cp -a "$source_abs" "$target_abs" || return 1
     if ! dotfiles_copy_matches "$source_abs" "$target_abs"; then
       record_failure "Copy verification failed for $target_rel"
       return 1
