@@ -8,6 +8,8 @@ fi
 DEV_SETUP_MISE_SOURCED=1
 
 MISE_BIN="${TARGET_HOME}/.local/bin/mise"
+MISE_MARKER="${TARGET_HOME}/.local/share/mise/.system-init-version"
+MISE_MAN_PAGE="${TARGET_HOME}/.local/share/man/man1/mise.1"
 
 # Fedora uses the linux-x64 release; macOS uses the macos-arm64 release.
 # Never execute a binary whose archive and inner checksum were not pinned.
@@ -55,6 +57,45 @@ mise_installed_version() {
   "$MISE_BIN" --version 2>/dev/null | awk 'NR == 1 { print $1; exit }'
 }
 
+# A marker is written only after the binary, share files, and manual page were
+# installed. This prevents a half-finished first run from being treated as a
+# complete installation on the next run.
+mise_install_complete() {
+  [[ -f "$MISE_MARKER" && ! -L "$MISE_MARKER" ]] || return 1
+  [[ "$(cat -- "$MISE_MARKER" 2>/dev/null || true)" == "$MISE_VERSION" ]]
+}
+
+mise_write_marker() {
+  local marker_dir
+
+  marker_dir="$(dirname -- "$MISE_MARKER")"
+  if [[ -L "$marker_dir" ]] || path_has_symlink_component "$marker_dir" "$TARGET_HOME"; then
+    log_error "Refusing to write the mise completion marker through a symlinked directory: $marker_dir"
+    return 1
+  fi
+  install -d -m 0755 "$marker_dir" || return 1
+  if [[ -L "$marker_dir" ]] || path_has_symlink_component "$marker_dir" "$TARGET_HOME"; then
+    log_error "mise marker directory became unsafe: $marker_dir"
+    return 1
+  fi
+  printf '%s\n' "$MISE_VERSION" | write_private_file "$MISE_MARKER"
+}
+
+mise_runtime_is_current() {
+  local tool="$1"
+  local version="$2"
+  local installed global
+
+  installed="$(MISE_OFFLINE=1 mise_run ls --installed --no-header "$tool" 2>/dev/null || true)"
+  global="$(MISE_OFFLINE=1 mise_run ls --global --no-header "$tool" 2>/dev/null || true)"
+
+  awk -v t="$tool" -v v="$version" \
+    '$1 == t && $2 == v { found = 1 } END { exit(found ? 0 : 1) }' <<<"$installed" \
+    || return 1
+  awk -v t="$tool" -v v="$version" \
+    '$1 == t && $2 == v && $4 == v { found = 1 } END { exit(found ? 0 : 1) }' <<<"$global"
+}
+
 mise_install_binary() {
   local installed
 
@@ -69,7 +110,7 @@ mise_install_binary() {
 
   installed="$(mise_installed_version || true)"
 
-  if [[ "$installed" == "$MISE_VERSION" ]]; then
+  if [[ "$installed" == "$MISE_VERSION" ]] && mise_install_complete; then
     log_debug "mise $MISE_VERSION is already installed."
     report_present "mise $MISE_VERSION"
     return 0
@@ -111,8 +152,8 @@ mise_install_binary() {
     log_error "Refusing to install mise through a symlinked directory: $install_dir"
     return 1
   fi
-  install -d -m 0755 "$install_dir"
-  install -m 0755 "$extracted_bin" "$MISE_BIN"
+  install -d -m 0755 "$install_dir" || return 1
+  install -m 0755 "$extracted_bin" "$MISE_BIN" || return 1
   if [[ -L "$MISE_BIN" ]] || ! mise_binary_trusted; then
     log_error "mise binary verification failed after installation."
     return 1
@@ -123,12 +164,12 @@ mise_install_binary() {
       log_error "Refusing to install mise share files through a symlinked directory: $share_dir"
       return 1
     fi
-    install -d -m 0755 "$share_dir"
+    install -d -m 0755 "$share_dir" || return 1
     if [[ -L "$share_dir" ]] || path_has_symlink_component "$share_dir" "$TARGET_HOME"; then
       log_error "mise share directory became unsafe: $share_dir"
       return 1
     fi
-    cp -a "$extract_dir/mise/share/." "$share_dir/"
+    cp -a "$extract_dir/mise/share/." "$share_dir/" || return 1
   fi
 
   local man_dir="$TARGET_HOME/.local/share/man/man1"
@@ -136,15 +177,18 @@ mise_install_binary() {
     log_error "Refusing to install mise manual pages through a symlinked directory: $man_dir"
     return 1
   fi
-  install -d -m 0755 "$man_dir"
+  install -d -m 0755 "$man_dir" || return 1
   if [[ -f "$extract_dir/mise/man/man1/mise.1" ]]; then
-    install -m 0644 "$extract_dir/mise/man/man1/mise.1" \
-      "$TARGET_HOME/.local/share/man/man1/mise.1"
+    install -m 0644 "$extract_dir/mise/man/man1/mise.1" "$MISE_MAN_PAGE" || return 1
   fi
 
   installed="$(mise_installed_version || true)"
   if [[ "$installed" != "$MISE_VERSION" ]]; then
     log_error "mise installation verification failed (got '${installed:-none}')"
+    return 1
+  fi
+  if ! mise_write_marker; then
+    log_error "Could not write the mise completion marker."
     return 1
   fi
 
@@ -178,6 +222,11 @@ mise_install_runtimes() {
 
   while read -r tool version; do
     [[ -z "$tool" ]] && continue
+    if mise_runtime_is_current "$tool" "$version"; then
+      log_debug "mise runtime already installed and pinned: ${tool} ${version}"
+      report_present "mise runtime ${tool}@${version}"
+      continue
+    fi
     if ! mise_run use --global "${tool}@${version}"; then
       record_failure "mise failed to install ${tool} ${version}"
       report_failed "mise runtime ${tool}@${version}"

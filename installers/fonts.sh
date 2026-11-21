@@ -14,10 +14,66 @@ else
   FONT_DIR="${TARGET_HOME}/.local/share/fonts/JetBrainsMono"
 fi
 FONT_REGULAR="$FONT_DIR/JetBrainsMonoNerdFont-Regular.ttf"
+FONT_MANIFEST="$FONT_DIR/.system-init-fonts.tsv"
 
 fonts_verify_installed() {
+  local version="" font expected entries=0
+
   [[ -f "$FONT_REGULAR" ]] || return 1
-  [[ "$(file_sha256 "$FONT_REGULAR")" == "$NERD_FONTS_FONT_SHA256" ]]
+  [[ "$(file_sha256 "$FONT_REGULAR")" == "$NERD_FONTS_FONT_SHA256" ]] || return 1
+  [[ -f "$FONT_MANIFEST" && ! -L "$FONT_MANIFEST" ]] || return 1
+
+  while IFS=$'\t' read -r font expected || [[ -n "$font" ]]; do
+    [[ -z "$font" ]] && continue
+    if [[ "$font" == version=* ]]; then
+      version="${font#version=}"
+      continue
+    fi
+    [[ -n "$expected" ]] || return 1
+    entries=$((entries + 1))
+    [[ -f "$FONT_DIR/$font" && ! -L "$FONT_DIR/$font" ]] || return 1
+    [[ "$(file_sha256 "$FONT_DIR/$font" 2>/dev/null || true)" == "$expected" ]] || return 1
+  done <"$FONT_MANIFEST"
+
+  [[ "$version" == "$NERD_FONTS_VERSION" ]] || return 1
+  (( entries > 0 ))
+}
+
+# Write the completion manifest only after every payload was installed. A
+# missing or partial manifest makes the next run reinstall, while identical
+# files are still left untouched by fonts_replace_file().
+fonts_write_manifest() {
+  local manifest_tmp file sha
+
+  (( $# > 0 )) || return 1
+  manifest_tmp="$(mktemp "$FONT_DIR/.system-init-fonts.XXXXXXXX")" || return 1
+  chmod_mode 600 "$manifest_tmp" || {
+    rm -f -- "$manifest_tmp"
+    return 1
+  }
+  if ! printf 'version=%s\n' "$NERD_FONTS_VERSION" >"$manifest_tmp"; then
+    rm -f -- "$manifest_tmp"
+    return 1
+  fi
+  for file in "$@"; do
+    if [[ ! -f "$FONT_DIR/$file" || -L "$FONT_DIR/$file" ]]; then
+      rm -f -- "$manifest_tmp"
+      return 1
+    fi
+    sha="$(file_sha256 "$FONT_DIR/$file" 2>/dev/null || true)"
+    if [[ -z "$sha" ]]; then
+      rm -f -- "$manifest_tmp"
+      return 1
+    fi
+    if ! printf '%s\t%s\n' "$file" "$sha" >>"$manifest_tmp"; then
+      rm -f -- "$manifest_tmp"
+      return 1
+    fi
+  done
+  if ! mv_replace "$manifest_tmp" "$FONT_MANIFEST"; then
+    rm -f -- "$manifest_tmp"
+    return 1
+  fi
 }
 
 # Replace an existing font or metadata file only after backing it up. The
@@ -73,6 +129,7 @@ fonts_install() {
   local archive="$TMP_DIR/JetBrainsMono.tar.xz"
   local extract_dir="$TMP_DIR/fonts"
   local regular_extracted
+  local -a installed_files=()
 
   download_verify "$NERD_FONTS_URL" "$archive" "$NERD_FONTS_SHA256" || return 1
   extract_archive "$archive" "$extract_dir" || return 1
@@ -101,19 +158,28 @@ fonts_install() {
     log_error "Font installation directory became unsafe: $FONT_DIR"
     return 1
   fi
-  local font destination
+  local font destination name
   for font in "$extract_dir"/*.ttf; do
     [[ -f "$font" ]] || continue
-    destination="$FONT_DIR/$(basename -- "$font")"
+    name="$(basename -- "$font")"
+    destination="$FONT_DIR/$name"
     fonts_replace_file "$font" "$destination" || return 1
+    installed_files+=("$name")
   done
   if [[ "${PLATFORM:-fedora}" != "macos" ]]; then
     if [[ -f "$extract_dir/OFL.txt" ]]; then
       fonts_replace_file "$extract_dir/OFL.txt" "$FONT_DIR/OFL.txt" || return 1
+      installed_files+=("OFL.txt")
     fi
     if [[ -f "$extract_dir/README.md" ]]; then
       fonts_replace_file "$extract_dir/README.md" "$FONT_DIR/README.md" || return 1
+      installed_files+=("README.md")
     fi
+  fi
+
+  if ! fonts_write_manifest "${installed_files[@]}"; then
+    log_error "Could not write the font completion manifest."
+    return 1
   fi
 
   if ! fonts_verify_installed; then

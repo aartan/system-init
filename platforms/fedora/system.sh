@@ -87,26 +87,34 @@ fedora_libvirt_sockets_enable() {
 
 fedora_libvirt_network_check() {
   if [[ "$DRY_RUN" == "1" ]]; then
-    log_dry "verify the libvirt 'default' NAT network and start it if inactive"
+    log_dry "verify the libvirt 'default' NAT network, start it if inactive, and enable autostart"
     return 0
   fi
 
-  local networks
+  local networks info active autostart
   networks="$(run_sudo virsh -c qemu:///system net-list --all 2>/dev/null || true)"
-  if ! grep -Eq '[[:space:]]default[[:space:]]' <<<"$networks"; then
+  if ! grep -Eq '[[:space:]]default([[:space:]]|$)' <<<"$networks"; then
     record_warning "The libvirt 'default' network is not defined; virt-manager can create one."
     return 0
   fi
 
-  if grep -Eq '[[:space:]]default[[:space:]]+active' <<<"$networks"; then
+  info="$(run_sudo virsh -c qemu:///system net-info default 2>/dev/null || true)"
+  active="$(awk -F: '$1 == "Active" { gsub(/[[:space:]]/, "", $2); print $2; exit }' <<<"$info")"
+  autostart="$(awk -F: '$1 == "Autostart" { gsub(/[[:space:]]/, "", $2); print $2; exit }' <<<"$info")"
+
+  if [[ "$active" == "yes" ]]; then
     log_debug "libvirt default network is active."
-    return 0
+  else
+    run_sudo virsh -c qemu:///system net-start default || \
+      record_warning "Could not start the libvirt 'default' network."
   fi
 
-  run_sudo virsh -c qemu:///system net-start default || \
-    record_warning "Could not start the libvirt 'default' network."
-  run_sudo virsh -c qemu:///system net-autostart default || \
-    record_warning "Could not autostart the libvirt 'default' network."
+  if [[ "$autostart" == "yes" ]]; then
+    log_debug "libvirt default network is configured to start automatically."
+  else
+    run_sudo virsh -c qemu:///system net-autostart default || \
+      record_warning "Could not autostart the libvirt 'default' network."
+  fi
 }
 
 # Platform-neutral hooks used by module post-install scripts.

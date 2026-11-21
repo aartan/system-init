@@ -115,6 +115,10 @@ flatpak_remote_ensure() {
   fi
 
   if ! have_command flatpak; then
+    if [[ "$DRY_RUN" == "1" ]]; then
+      log_dry "would ensure Flatpak remote '$remote' from $url after flatpak is installed"
+      return 0
+    fi
     record_failure "flatpak is not installed; cannot manage Flatpak applications."
     return 1
   fi
@@ -167,6 +171,12 @@ flatpak_install() {
     log_debug "All requested Flatpak applications are already installed."
     return 0
   fi
+
+  # The remote must exist before the first install attempt. This matters on a
+  # fresh Fedora where Flathub is not configured yet; retrying later is not
+  # enough. The ensure call is a no-op when the approved remote is already
+  # present.
+  flatpak_remote_ensure || return 1
 
   if [[ "$DRY_RUN" == "1" ]]; then
     log_dry "sudo flatpak install --system -y --noninteractive $remote ${missing[*]}"
