@@ -7,11 +7,20 @@ if (( EUID == 0 )); then
   exit 1
 fi
 
+# Resolve privileged commands only from trusted system directories. macOS
+# applies its validated Homebrew PATH in lib/bootstrap.sh instead.
+if [[ "$(uname -s)" != "Darwin" ]]; then
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 export REPO_ROOT
+
+# shellcheck source=../lib/bootstrap.sh
+source "$REPO_ROOT/lib/bootstrap.sh"
+export DEV_SETUP_BOOTSTRAP_READONLY=1
+bootstrap_run "$@"
 
 # shellcheck source=../lib/logging.sh
 source "$REPO_ROOT/lib/logging.sh"

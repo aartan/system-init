@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Update Fedora packages, Flatpak apps, and mise-managed runtimes.
+# Update platform packages and mise-managed runtimes.
 set -Eeuo pipefail
 
 if (( EUID == 0 )); then
@@ -7,11 +7,20 @@ if (( EUID == 0 )); then
   exit 1
 fi
 
+# Resolve privileged commands only from trusted system directories. macOS
+# applies its validated Homebrew PATH in lib/bootstrap.sh instead.
+if [[ "$(uname -s)" != "Darwin" ]]; then
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 export REPO_ROOT
+
+# shellcheck source=../lib/bootstrap.sh
+source "$REPO_ROOT/lib/bootstrap.sh"
+export DEV_SETUP_BOOTSTRAP_READONLY=1
+bootstrap_run "$@"
 
 # shellcheck source=../lib/logging.sh
 source "$REPO_ROOT/lib/logging.sh"
@@ -30,6 +39,8 @@ trap 'state_lock_release' EXIT
 source "$REPO_ROOT/installers/dnf.sh"
 # shellcheck source=installers/flatpak.sh
 source "$REPO_ROOT/installers/flatpak.sh"
+# shellcheck source=installers/brew.sh
+source "$REPO_ROOT/installers/brew.sh"
 # shellcheck source=installers/mise.sh
 source "$REPO_ROOT/installers/mise.sh"
 
@@ -41,9 +52,9 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/update.sh [OPTIONS]
 
-Update system packages, Flatpak applications, the system-init Git checkout, and
-the runtime versions pinned in config/runtimes.conf. Pins are never changed
-automatically.
+Update system packages, Flatpak or Homebrew applications, the system-init Git
+checkout, and the runtime versions pinned in config/runtimes.conf (or
+config/runtimes.macos.conf). Pins are never changed automatically.
 
 Options:
   --dry-run         Show commands without changing the system.
@@ -101,9 +112,11 @@ if [[ "$SKIP_PACKAGES" != "1" ]]; then
 
   if [[ "$PLATFORM" == "fedora" ]]; then
     dnf_update || record_failure "DNF update failed."
+  elif [[ "$PLATFORM" == "macos" ]]; then
+    brew_update || record_failure "Homebrew update failed."
   fi
 
-  if have_command flatpak; then
+  if [[ "$PLATFORM" == "fedora" ]] && have_command flatpak; then
     flatpak_update || record_failure "Flatpak update failed."
   fi
 else

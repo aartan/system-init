@@ -7,11 +7,20 @@ if (( EUID == 0 )); then
   exit 1
 fi
 
+# Resolve privileged commands only from trusted system directories. macOS
+# applies its validated Homebrew PATH in lib/bootstrap.sh instead.
+if [[ "$(uname -s)" != "Darwin" ]]; then
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 export REPO_ROOT
+
+# shellcheck source=../lib/bootstrap.sh
+source "$REPO_ROOT/lib/bootstrap.sh"
+export DEV_SETUP_BOOTSTRAP_READONLY=1
+bootstrap_run "$@"
 
 # shellcheck source=../lib/logging.sh
 source "$REPO_ROOT/lib/logging.sh"
@@ -31,6 +40,10 @@ source "$REPO_ROOT/lib/backups.sh"
 source "$REPO_ROOT/installers/dnf.sh"
 # shellcheck source=installers/flatpak.sh
 source "$REPO_ROOT/installers/flatpak.sh"
+# shellcheck source=installers/brew.sh
+source "$REPO_ROOT/installers/brew.sh"
+# shellcheck source=installers/alacritty.sh
+source "$REPO_ROOT/installers/alacritty.sh"
 # shellcheck source=installers/mise.sh
 source "$REPO_ROOT/installers/mise.sh"
 # shellcheck source=installers/fonts.sh
@@ -75,7 +88,9 @@ log_info "Target home: $TARGET_HOME"
 
 platform_validate || true
 
-if sudo_binary_valid && "$SUDO_BIN" -n true >/dev/null 2>&1; then
+if [[ "$PLATFORM" == "macos" ]]; then
+  ok "macOS package and user configuration operations do not require sudo."
+elif sudo_binary_valid && "$SUDO_BIN" -n true >/dev/null 2>&1; then
   ok "Passwordless sudo is available."
 else
   warn "sudo requires a password or $SUDO_BIN is unavailable; package operations must be run interactively."
@@ -105,6 +120,12 @@ while IFS= read -r module; do
         ;;
       flatpak)
         flatpak info --system -- "$package" >/dev/null 2>&1 && present=0
+        ;;
+      brew)
+        brew list --formula "$package" >/dev/null 2>&1 && present=0
+        ;;
+      cask)
+        brew list --cask "$package" >/dev/null 2>&1 && present=0
         ;;
       *)
         present=1
@@ -150,8 +171,12 @@ if have_command zsh; then
   if ! target_user_is_valid "$TARGET_USER"; then
     fail "Invalid target user name: ${TARGET_USER:-<empty>}"
   else
-    login_shell="$(getent -- passwd "$TARGET_USER" | awk -F: '{ print $7 }')"
-    zsh_path="$(command -v zsh)"
+    login_shell="$(user_login_shell "$TARGET_USER" 2>/dev/null || true)"
+    if [[ "$PLATFORM" == "macos" ]]; then
+      zsh_path=/bin/zsh
+    else
+      zsh_path="$(command -v zsh)"
+    fi
     if [[ "$login_shell" == "$zsh_path" ]]; then
       ok "Login shell for $TARGET_USER is $zsh_path."
     else
@@ -245,11 +270,19 @@ else
   fail "JetBrainsMono Nerd Font is missing or does not match the pinned checksum."
 fi
 
-if have_command fc-match; then
+if [[ "$PLATFORM" != "macos" ]] && have_command fc-match; then
   if fc-match "JetBrainsMono Nerd Font" | grep -q "JetBrainsMono Nerd Font"; then
     ok "fontconfig resolves JetBrainsMono Nerd Font."
   else
     warn "fontconfig does not currently resolve JetBrainsMono Nerd Font."
+  fi
+fi
+
+if [[ "$PLATFORM" == "macos" ]]; then
+  if alacritty_verify_installed; then
+    ok "Alacritty $ALACRITTY_VERSION is installed."
+  else
+    fail "Alacritty $ALACRITTY_VERSION is not installed."
   fi
 fi
 
@@ -264,18 +297,36 @@ fi
 # ---------------------------------------------------------------------------
 log_section "Databases"
 if [[ "$ENABLE_DATABASE_SERVICES" == "1" ]]; then
-  for unit in postgresql.service valkey.service; do
-    if systemctl is-enabled "$unit" >/dev/null 2>&1; then
-      ok "$unit is enabled."
+  if [[ "$PLATFORM" == "macos" ]]; then
+    if [[ -d /Applications/Postgres.app ]]; then
+      if [[ -x /Applications/Postgres.app/Contents/Versions/latest/bin/pg_isready ]] \
+        && /Applications/Postgres.app/Contents/Versions/latest/bin/pg_isready -q >/dev/null 2>&1; then
+        ok "Postgres.app is accepting connections."
+      else
+        fail "Postgres.app is installed but PostgreSQL is not accepting connections."
+      fi
     else
-      fail "$unit is not enabled."
+      fail "Postgres.app is not installed."
     fi
-    if systemctl is-active "$unit" >/dev/null 2>&1; then
-      ok "$unit is active."
+    if macos_brew_service_started valkey; then
+      ok "Valkey is running as a Homebrew service."
     else
-      fail "$unit is not active."
+      fail "Valkey is not running as a Homebrew service."
     fi
-  done
+  else
+    for unit in postgresql.service valkey.service; do
+      if systemctl is-enabled "$unit" >/dev/null 2>&1; then
+        ok "$unit is enabled."
+      else
+        fail "$unit is not enabled."
+      fi
+      if systemctl is-active "$unit" >/dev/null 2>&1; then
+        ok "$unit is active."
+      else
+        fail "$unit is not active."
+      fi
+    done
+  fi
 else
   warn "Database service management is disabled in config/settings.conf."
 fi
@@ -285,27 +336,69 @@ fi
 # ---------------------------------------------------------------------------
 log_section "Virtualization"
 if [[ "$ENABLE_VIRTUALIZATION_SERVICES" == "1" ]]; then
-  if [[ -e /dev/kvm ]]; then
-    ok "/dev/kvm is available."
-  else
-    warn "/dev/kvm is missing; KVM acceleration is unavailable."
-  fi
-
-  for unit in virtqemud.socket virtnetworkd.socket virtstoraged.socket virtlogd.socket; do
-    if systemctl is-active "$unit" >/dev/null 2>&1; then
-      ok "$unit is active."
+  if [[ "$PLATFORM" == "macos" ]]; then
+    if [[ "$(sysctl -n kern.hv_support 2>/dev/null || printf '0')" == "1" ]]; then
+      ok "Apple Hypervisor framework is available."
     else
-      fail "$unit is not active."
+      warn "Apple Hypervisor framework is unavailable."
     fi
-  done
-
-  if have_command virsh; then
-    ok "virsh is installed."
+    if [[ -d /Applications/UTM.app ]]; then
+      ok "UTM is installed."
+    else
+      fail "UTM is not installed."
+    fi
   else
-    fail "virsh is not installed."
+    if [[ -e /dev/kvm ]]; then
+      ok "/dev/kvm is available."
+    else
+      warn "/dev/kvm is missing; KVM acceleration is unavailable."
+    fi
+
+    for unit in virtqemud.socket virtnetworkd.socket virtstoraged.socket virtlogd.socket; do
+      if systemctl is-active "$unit" >/dev/null 2>&1; then
+        ok "$unit is active."
+      else
+        fail "$unit is not active."
+      fi
+    done
+
+    if have_command virsh; then
+      ok "virsh is installed."
+    else
+      fail "virsh is not installed."
+    fi
   fi
 else
   warn "Virtualization service management is disabled in config/settings.conf."
+fi
+
+# ---------------------------------------------------------------------------
+# macOS integration
+# ---------------------------------------------------------------------------
+if [[ "$PLATFORM" == "macos" ]]; then
+  log_section "macOS integration"
+  if [[ -x "$BREW_BIN" ]] && [[ "$("$BREW_BIN" --prefix 2>/dev/null)" == "$BREW_PREFIX" ]]; then
+    ok "Homebrew is installed at $BREW_PREFIX."
+  else
+    fail "Homebrew is missing or not at $BREW_PREFIX."
+  fi
+  if [[ -x "$BOOTSTRAP_BASH" ]] \
+    && "$BOOTSTRAP_BASH" -c '[[ ${BASH_VERSINFO[0]:-0} -ge 5 ]]' >/dev/null 2>&1; then
+    ok "Homebrew Bash 5 is available."
+  else
+    fail "Homebrew Bash 5 is missing at $BOOTSTRAP_BASH."
+  fi
+
+  if have_command podman; then
+    if podman machine list --format '{{.Name}} {{.Running}}' 2>/dev/null \
+      | awk '$2 == "true" { found = 1 } END { exit(found ? 0 : 1) }'; then
+      ok "A Podman machine is running."
+    elif [[ "${PODMAN_MACHINE_AUTO:-1}" == "1" ]]; then
+      fail "No Podman machine is running; run ./install.sh or start one with podman machine start."
+    else
+      warn "No Podman machine is running and automatic setup is disabled."
+    fi
+  fi
 fi
 
 # ---------------------------------------------------------------------------

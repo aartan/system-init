@@ -9,12 +9,20 @@ if (( EUID == 0 )); then
   exit 1
 fi
 
-# Resolve privileged commands only from trusted system directories.
+# Resolve privileged commands only from trusted system directories. macOS
+# applies its validated Homebrew PATH in lib/bootstrap.sh instead.
+if [[ "$(uname -s)" != "Darwin" ]]; then
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export REPO_ROOT
+
+# shellcheck source=lib/bootstrap.sh
+source "$REPO_ROOT/lib/bootstrap.sh"
+export DEV_SETUP_BOOTSTRAP_READONLY=1
+bootstrap_run "$@"
 
 # shellcheck source=lib/logging.sh
 source "$REPO_ROOT/lib/logging.sh"
@@ -35,6 +43,10 @@ trap 'state_lock_release' EXIT
 source "$REPO_ROOT/installers/dnf.sh"
 # shellcheck source=installers/flatpak.sh
 source "$REPO_ROOT/installers/flatpak.sh"
+# shellcheck source=installers/brew.sh
+source "$REPO_ROOT/installers/brew.sh"
+# shellcheck source=installers/alacritty.sh
+source "$REPO_ROOT/installers/alacritty.sh"
 
 REMOVE_PACKAGES=0
 RESTORE_BACKUPS=0
@@ -43,6 +55,19 @@ ASSUME_YES=0
 # Explicit flags only; do not inherit a permissive environment default.
 RESTORE_ALLOW_LEGACY=0
 RESTORE_ALLOW_UNSIGNED=0
+
+PROTECTED_BREW=(
+  bash
+  git
+  git-lfs
+  curl
+  ca-certificates
+  openssl@3
+  gnupg
+  tar
+  gzip
+  xz
+)
 
 PROTECTED_DNF=(
   sudo
@@ -78,13 +103,15 @@ Options:
   --allow-legacy     Allow restoring an unverified v1 snapshot (explicit).
   --allow-unsigned   Allow restoring an unsigned v2 snapshot (hashes only).
   --packages         Remove declared Flatpak apps and non-protected DNF packages.
-  --yes              Skip the package-removal confirmation prompt.
+  --yes, -y          Skip the package-removal confirmation prompt.
+  --non-interactive  Never prompt; implies --yes.
   --purge-state      Delete all system-init backups, logs, and state (explicit).
   --dry-run          Show actions without changing anything.
   -h, --help         Show this help.
 
-Oh My Zsh, Powerlevel10k, mise, fonts, and user project files are never removed
-by this script.
+Oh My Zsh, Powerlevel10k, mise, fonts, Postgres.app data, and user project
+files are never removed by this script. On macOS, protected Homebrew formulae
+such as bash, git, curl, and openssl@3 are kept.
 EOF
 }
 
@@ -103,6 +130,9 @@ while (( $# > 0 )); do
       REMOVE_PACKAGES=1
       ;;
     --yes|-y)
+      ASSUME_YES=1
+      ;;
+    --non-interactive)
       ASSUME_YES=1
       ;;
     --purge-state)
@@ -227,6 +257,9 @@ elif [[ "$REMOVE_PACKAGES" == "1" ]]; then
   log_section "Declared packages"
   flatpak_apps=()
   dnf_packages=()
+  brew_formulae=()
+  cask_apps=()
+  macos_apps=()
 
   for module in "${SELECTED_MODULES[@]}"; do
     file="$(packages_module_file "$module")"
@@ -261,19 +294,45 @@ elif [[ "$REMOVE_PACKAGES" == "1" ]]; then
             fi
           fi
           ;;
+        brew)
+          if brew_package_installed "$package"; then
+            protected=0
+            for item in "${PROTECTED_BREW[@]}"; do
+              [[ "$item" == "$package" ]] && protected=1
+            done
+            if (( protected == 0 )); then
+              brew_formulae+=("$package")
+            fi
+          fi
+          ;;
+        cask)
+          if brew_cask_installed "$package"; then
+            cask_apps+=("$package")
+          fi
+          ;;
       esac
     done <"$file"
   done
 
-  if (( ${#flatpak_apps[@]} == 0 && ${#dnf_packages[@]} == 0 )); then
+  if [[ "$PLATFORM" == "macos" ]] && alacritty_installed_app >/dev/null 2>&1; then
+    macos_apps+=("alacritty")
+  fi
+
+  if (( ${#flatpak_apps[@]} == 0 && ${#dnf_packages[@]} == 0 && ${#brew_formulae[@]} == 0 && ${#cask_apps[@]} == 0 && ${#macos_apps[@]} == 0 )); then
     log_info "No removable declared packages are installed."
   else
     printf 'Flatpak apps: %s\n' "${flatpak_apps[*]:-none}"
     printf 'DNF packages: %s\n' "${dnf_packages[*]:-none}"
+    printf 'Homebrew formulae: %s\n' "${brew_formulae[*]:-none}"
+    printf 'Homebrew casks: %s\n' "${cask_apps[*]:-none}"
+    printf 'macOS apps: %s\n' "${macos_apps[*]:-none}"
 
     if [[ "$DRY_RUN" == "1" ]]; then
       (( ${#flatpak_apps[@]} > 0 )) && log_dry "flatpak uninstall ${flatpak_apps[*]}"
       (( ${#dnf_packages[@]} > 0 )) && log_dry "sudo dnf remove ${dnf_packages[*]}"
+      (( ${#brew_formulae[@]} > 0 )) && log_dry "brew uninstall ${brew_formulae[*]}"
+      (( ${#cask_apps[@]} > 0 )) && log_dry "brew uninstall --cask ${cask_apps[*]}"
+      (( ${#macos_apps[@]} > 0 )) && alacritty_remove
     else
       confirmed=1
       if [[ "$ASSUME_YES" != "1" ]]; then
@@ -283,7 +342,7 @@ elif [[ "$REMOVE_PACKAGES" == "1" ]]; then
           [[ "$answer" == "yes" ]] || confirmed=0
         else
           confirmed=0
-          log_error "Refusing package removal without --yes on a non-interactive terminal."
+          record_failure "Refusing package removal without --yes on a non-interactive terminal."
         fi
       fi
 
@@ -293,6 +352,20 @@ elif [[ "$REMOVE_PACKAGES" == "1" ]]; then
         fi
         if (( ${#dnf_packages[@]} > 0 )); then
           dnf_remove "${dnf_packages[@]}" || record_failure "DNF removal failed."
+        fi
+        if [[ " ${brew_formulae[*]} " == *" valkey "* ]]; then
+          if brew_service_stop valkey; then
+            log_debug "Stopped the Valkey service before package removal."
+          fi
+        fi
+        if (( ${#brew_formulae[@]} > 0 )); then
+          brew_remove_formulae "${brew_formulae[@]}" || record_failure "Homebrew formula removal failed."
+        fi
+        if (( ${#cask_apps[@]} > 0 )); then
+          brew_remove_casks "${cask_apps[@]}" || record_failure "Homebrew cask removal failed."
+        fi
+        if [[ " ${macos_apps[*]} " == *" alacritty "* ]]; then
+          alacritty_remove || record_failure "Alacritty removal failed."
         fi
       fi
     fi
