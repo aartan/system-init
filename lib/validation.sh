@@ -44,15 +44,22 @@ validation_environment() {
     config/modules.conf
     config/profiles.conf
     dotfiles/manifest.tsv
+    lib/bootstrap.sh
     lib/common.sh
+    lib/compat.sh
     lib/logging.sh
     lib/platform.sh
+    lib/report.sh
     lib/packages.sh
     lib/modules.sh
     lib/backups.sh
     lib/dotfiles.sh
     lib/git_identity.sh
   )
+  if [[ "$PLATFORM" == "macos" ]]; then
+    required+=(config/runtimes.macos.conf)
+  fi
+
   local item
   for item in "${required[@]}"; do
     if [[ ! -f "$REPO_ROOT/$item" ]]; then
@@ -67,9 +74,15 @@ validation_environment() {
 validation_required_commands() {
   # git is intentionally not required here: the core module installs it before
   # the shell-framework and LFS steps that need it.
-  local -a commands=(curl tar sha256sum awk sed grep find realpath install mktemp findmnt)
+  local -a commands=(curl tar awk sed grep find install mktemp)
   local command
   local failed=0
+
+  if [[ "$PLATFORM" == "macos" ]]; then
+    commands+=(shasum)
+  else
+    commands+=(sha256sum realpath findmnt)
+  fi
 
   if [[ "$PLATFORM" == "fedora" ]]; then
     commands+=(dnf rpm systemctl)

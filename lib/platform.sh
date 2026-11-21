@@ -13,6 +13,9 @@ PLATFORM_SUPPORTED=0
 PLATFORM_PACKAGE_MANAGERS=""
 PLATFORM_ARCH=""
 FEDORA_VERSION=""
+# Set by lib/bootstrap.sh on macOS. Defaults keep library-only callers safe.
+BREW_PREFIX="${BREW_PREFIX:-/opt/homebrew}"
+BREW_BIN="${BREW_BIN:-$BREW_PREFIX/bin/brew}"
 # Consumed by platforms/fedora/platform.sh.
 # shellcheck disable=SC2034
 FEDORA_MIN_VERSION=43
@@ -21,6 +24,8 @@ platform_detect() {
   local kernel
   kernel="$(uname -s)"
   PLATFORM_ARCH="$(uname -m)"
+  # Normalise the macOS spelling so architecture checks are shared.
+  [[ "$PLATFORM_ARCH" == "arm64" ]] && PLATFORM_ARCH="aarch64"
 
   case "$kernel" in
     Linux)
@@ -58,8 +63,7 @@ platform_load() {
   source "$config_file"
 
   if [[ "$PLATFORM_SUPPORTED" != "1" ]]; then
-    log_error "$PLATFORM_NAME support is scaffolded but not enabled in this release."
-    log_error "This repository currently implements Fedora only. macOS support is Phase 2."
+    log_error "$PLATFORM_NAME is not enabled in this release."
     return 1
   fi
 
@@ -106,6 +110,14 @@ platform_post_install() {
 }
 
 platform_sudo_prepare() {
+  if [[ "$PLATFORM" == "macos" ]]; then
+    # Homebrew, mise, fonts, dotfiles and the login shell are all managed
+    # without root on macOS. Keep the single confirmation prompt meaningful
+    # and do not ask for sudo up front.
+    log_debug "macOS operations do not require sudo."
+    return 0
+  fi
+
   if [[ "$DRY_RUN" == "1" ]]; then
     log_dry "would validate sudo access"
     return 0
@@ -131,6 +143,10 @@ platform_sudo_prepare() {
 }
 
 platform_arch_supported() {
+  if [[ "$PLATFORM" == "macos" ]]; then
+    [[ "$PLATFORM_ARCH" == "aarch64" ]]
+    return
+  fi
   case "$PLATFORM_ARCH" in
     x86_64|aarch64) return 0 ;;
     *) return 1 ;;

@@ -108,3 +108,32 @@ fedora_libvirt_network_check() {
   run_sudo virsh -c qemu:///system net-autostart default || \
     record_warning "Could not autostart the libvirt 'default' network."
 }
+
+# Platform-neutral hooks used by module post-install scripts.
+database_postgresql_enable() {
+  fedora_postgresql_enable
+}
+
+database_valkey_enable() {
+  fedora_valkey_enable
+}
+
+virtualization_accel_check() {
+  if [[ "$DRY_RUN" != "1" && ! -e /dev/kvm ]]; then
+    record_warning "/dev/kvm is missing. Enable AMD-V/Intel VT-x in firmware for KVM acceleration."
+  fi
+  return 0
+}
+
+virtualization_services_enable() {
+  fedora_libvirt_sockets_enable
+}
+
+virtualization_network_check() {
+  fedora_libvirt_network_check
+}
+
+container_runtime_prepare() {
+  # Fedora runs Podman natively; the containers module verifies rootless mode.
+  return 0
+}
