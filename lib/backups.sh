@@ -46,7 +46,7 @@ backup_sign_manifest() {
     log_error "Failed to sign the backup manifest with $BACKUP_SIGNING_KEY."
     return 1
   fi
-  chmod 600 -- "$signature"
+  chmod_mode 600 "$signature"
 }
 
 # 0 = valid signature by the configured primary fingerprint, 1 = invalid,
@@ -172,11 +172,11 @@ backup_manifest_build() {
   fi
 
   init_private_dir "$STATE_DIR" || return 1
-  secure_dir="$(mktemp -d -- "$STATE_DIR/.backup-sign.XXXXXXXX")" || {
+  secure_dir="$(mktemp -d "$STATE_DIR/.backup-sign.XXXXXXXX")" || {
     log_error "Failed to create a private signing directory."
     return 1
   }
-  chmod 700 -- "$secure_dir" || {
+  chmod_mode 700 "$secure_dir" || {
     rm -rf -- "$secure_dir"
     return 1
   }
@@ -198,7 +198,7 @@ backup_manifest_build() {
     return 1
   }
   rm -f -- "$unsorted"
-  chmod 600 -- "$secure_manifest" || {
+  chmod_mode 600 "$secure_manifest" || {
     rm -rf -- "$secure_dir"
     return 1
   }
@@ -295,7 +295,7 @@ backup_manifest_publish() {
     rm -rf -- "$secure_dir"
     return 1
   fi
-  if ! mv -fT -- "$secure_manifest" "$run/manifest.v2"; then
+  if ! mv_replace "$secure_manifest" "$run/manifest.v2"; then
     log_error "Failed to publish the canonical backup manifest."
     if (( had_old == 1 )); then
       cp -p -- "$old_manifest" "$run/manifest.v2" 2>/dev/null || true
@@ -305,7 +305,7 @@ backup_manifest_publish() {
     return 1
   fi
   if [[ -n "$BACKUP_SIGNING_KEY" ]]; then
-    if ! mv -fT -- "$secure_sig" "$run/manifest.v2.sig"; then
+    if ! mv_replace "$secure_sig" "$run/manifest.v2.sig"; then
       log_error "Failed to publish the backup signature."
       rm -f -- "$run/manifest.v2" "$run/manifest.v2.sig" 2>/dev/null || true
       if (( had_old == 1 )); then
@@ -388,7 +388,7 @@ backup_discard_snapshot() {
   local backup_root
 
   [[ -n "$run" ]] || return 0
-  backup_root="$(realpath -e -- "$BACKUP_DIR" 2>/dev/null)" || return 1
+  backup_root="$(path_canonicalize "$BACKUP_DIR" 2>/dev/null)" || return 1
   [[ "$(dirname -- "$run")" == "$backup_root" && ! -L "$run" ]] || return 1
   if safe_rm_rf "$run"; then
     BACKUP_RUN_DIR=""
@@ -412,7 +412,7 @@ backup_snapshot_mark_incomplete() {
   reason="$(awk -F= '$1 == "reason" { print $2; exit }' "$metadata" 2>/dev/null || true)"
   host="$(awk -F= '$1 == "host" { print $2; exit }' "$metadata" 2>/dev/null || true)"
   user="$(awk -F= '$1 == "user" { print $2; exit }' "$metadata" 2>/dev/null || true)"
-  tmp="$(mktemp -- "$run/.metadata.XXXXXXXX")" || return 1
+  tmp="$(mktemp "$run/.metadata.XXXXXXXX")" || return 1
   if ! {
     printf 'created=%s\nreason=%s\nhost=%s\nuser=%s\ncomplete=0\n' \
       "${created:-unknown}" "${reason:-unknown}" "${host:-unknown}" "${user:-unknown}" >"$tmp"
@@ -420,8 +420,8 @@ backup_snapshot_mark_incomplete() {
     rm -f -- "$tmp"
     return 1
   fi
-  chmod 600 -- "$tmp" || { rm -f -- "$tmp"; return 1; }
-  mv -fT -- "$tmp" "$metadata" || { rm -f -- "$tmp"; return 1; }
+  chmod_mode 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv_replace "$tmp" "$metadata" || { rm -f -- "$tmp"; return 1; }
 }
 
 backup_snapshot_mark_complete() {
@@ -434,7 +434,7 @@ backup_snapshot_mark_complete() {
   reason="$(awk -F= '$1 == "reason" { print $2; exit }' "$metadata" 2>/dev/null || true)"
   host="$(awk -F= '$1 == "host" { print $2; exit }' "$metadata" 2>/dev/null || true)"
   user="$(awk -F= '$1 == "user" { print $2; exit }' "$metadata" 2>/dev/null || true)"
-  tmp="$(mktemp -- "$run/.metadata.XXXXXXXX")" || return 1
+  tmp="$(mktemp "$run/.metadata.XXXXXXXX")" || return 1
   if ! {
     printf 'created=%s\nreason=%s\nhost=%s\nuser=%s\ncomplete=1\n' \
       "${created:-unknown}" "${reason:-unknown}" "${host:-unknown}" "${user:-unknown}" >"$tmp"
@@ -442,8 +442,8 @@ backup_snapshot_mark_complete() {
     rm -f -- "$tmp"
     return 1
   fi
-  chmod 600 -- "$tmp" || { rm -f -- "$tmp"; return 1; }
-  mv -fT -- "$tmp" "$metadata" || { rm -f -- "$tmp"; return 1; }
+  chmod_mode 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv_replace "$tmp" "$metadata" || { rm -f -- "$tmp"; return 1; }
   BACKUP_SNAPSHOT_COMPLETE=1
 }
 
@@ -589,9 +589,9 @@ backup_rollback_pending_entry() {
     if have_command truncate; then
       truncate -s "$previous_manifest_size" -- "$BACKUP_RUN_DIR/manifest.tsv" 2>/dev/null || true
     else
-      tmp="$(mktemp -- "$BACKUP_RUN_DIR/.manifest-rollback.XXXXXXXX")" || return 1
+      tmp="$(mktemp "$BACKUP_RUN_DIR/.manifest-rollback.XXXXXXXX")" || return 1
       if head -c "$previous_manifest_size" -- "$BACKUP_RUN_DIR/manifest.tsv" >"$tmp"; then
-        mv -fT -- "$tmp" "$BACKUP_RUN_DIR/manifest.tsv"
+        mv_replace "$tmp" "$BACKUP_RUN_DIR/manifest.tsv"
       else
         rm -f -- "$tmp"
       fi
@@ -641,7 +641,7 @@ backup_path() {
   local entry was_complete=0 previous_count previous_manifest_size
   [[ "$BACKUP_SNAPSHOT_COMPLETE" == "1" ]] && was_complete=1
   previous_count="$BACKUP_ENTRY_COUNT"
-  previous_manifest_size="$(stat -c '%s' -- "$manifest" 2>/dev/null || printf '0')"
+  previous_manifest_size="$(file_size "$manifest" 2>/dev/null || printf '0')"
 
   if [[ -n "${BACKUP_SOURCE_PATHS[$source_path]:-}" ]]; then
     local existing_destination
@@ -689,7 +689,7 @@ backup_path() {
     log_error "Backup payload destination already exists: $destination"
     return 1
   fi
-  if ! cp -a --no-dereference -- "$source_path" "$destination"; then
+  if ! cp -a "$source_path" "$destination"; then
     log_error "Failed to back up $source_path"
     return 1
   fi
@@ -707,11 +707,11 @@ backup_path() {
       return 1
     }
     v2_size="$(printf '%s' "$v2_target" | LC_ALL=C wc -c | tr -d '[:space:]')"
-    v2_sha="$(printf '%s' "$v2_target" | sha256sum | awk '{ print $1; exit }')"
+    v2_sha="$(string_sha256 "$v2_target")"
     v2_mode="0777"
   elif [[ -f "$destination" ]]; then
     v2_type="file"
-    v2_size="$(stat -c '%s' -- "$destination" 2>/dev/null)" || {
+    v2_size="$(file_size "$destination" 2>/dev/null)" || {
       log_error "Could not read the backed-up file size: $source_path"
       return 1
     }
@@ -826,8 +826,8 @@ backup_snapshot_path() {
   [[ -n "$snapshot" && "$snapshot" != *..* ]] || return 1
   [[ ! -L "$BACKUP_DIR" ]] || return 1
 
-  backup_root="$(realpath -e -- "$BACKUP_DIR" 2>/dev/null)" || return 1
-  resolved="$(realpath -e -- "$snapshot" 2>/dev/null)" || return 1
+  backup_root="$(path_canonicalize "$BACKUP_DIR" 2>/dev/null)" || return 1
+  resolved="$(path_canonicalize "$snapshot" 2>/dev/null)" || return 1
 
   [[ "$resolved" == "$backup_root"/* ]] || return 1
   [[ "$(dirname -- "$resolved")" == "$backup_root" ]] || return 1
@@ -904,11 +904,11 @@ backup_payload_symlink_safe() {
   [[ -n "$target" ]] || return 1
 
   if [[ "$target" == /* ]]; then
-    resolved="$(realpath -m -- "$target" 2>/dev/null)" || return 1
+    resolved="$(path_resolve "$target" 2>/dev/null)" || return 1
   else
     # A relative link is interpreted where it will be installed, not inside
     # the snapshot.
-    resolved="$(realpath -m -- "${dest_parent:-$(dirname -- "$stored")}/$target" 2>/dev/null)" || return 1
+    resolved="$(path_resolve "${dest_parent:-$(dirname -- "$stored")}/$target" 2>/dev/null)" || return 1
   fi
 
   [[ "$resolved" == "$home_root"/* || "$resolved" == "$repo_root"/* ]]
@@ -1001,7 +1001,7 @@ backup_v2_entry_verify() {
   case "$type" in
     file)
       [[ -f "$file" && ! -L "$file" ]] || return 1
-      actual_size="$(stat -c '%s' -- "$file" 2>/dev/null)" || return 1
+      actual_size="$(file_size "$file" 2>/dev/null)" || return 1
       [[ "$actual_size" == "$expected_size" ]] || return 1
       actual_sha="$(file_sha256 "$file" 2>/dev/null || true)"
       [[ "$actual_sha" == "$expected_sha" ]]
@@ -1011,7 +1011,7 @@ backup_v2_entry_verify() {
       target="$(readlink -- "$file" 2>/dev/null)" || return 1
       actual_size="$(printf '%s' "$target" | LC_ALL=C wc -c | tr -d '[:space:]')"
       [[ "$actual_size" == "$expected_size" ]] || return 1
-      actual_sha="$(printf '%s' "$target" | sha256sum | awk '{ print $1; exit }')"
+      actual_sha="$(string_sha256 "$target")"
       [[ "$actual_sha" == "$expected_sha" ]]
       ;;
     *)
@@ -1074,11 +1074,11 @@ backup_journal_begin() {
   fi
   init_private_dir "$STATE_DIR" || return 1
   init_private_dir "$JOURNAL_DIR" || return 1
-  RESTORE_JOURNAL="$(mktemp -- "$JOURNAL_DIR/restore-XXXXXXXX.journal")" || {
+  RESTORE_JOURNAL="$(mktemp "$JOURNAL_DIR/restore-XXXXXXXX.journal")" || {
     log_error "Could not create a private restore journal."
     return 1
   }
-  chmod 600 -- "$RESTORE_JOURNAL" || {
+  chmod_mode 600 "$RESTORE_JOURNAL" || {
     rm -f -- "$RESTORE_JOURNAL"
     RESTORE_JOURNAL=""
     return 1
@@ -1135,11 +1135,11 @@ backup_restore_entry_validate() {
     return 1
   }
 
-  original_lex="$(realpath -m -s -- "$original" 2>/dev/null)" || {
+  original_lex="$(path_lexical "$original" 2>/dev/null)" || {
     log_error "Could not normalise restore destination: $original"
     return 1
   }
-  stored_lex="$(realpath -m -s -- "$stored" 2>/dev/null)" || {
+  stored_lex="$(path_lexical "$stored" 2>/dev/null)" || {
     log_error "Could not normalise backup payload: $stored"
     return 1
   }
@@ -1206,7 +1206,7 @@ backup_restore_entry_validate() {
     log_error "Refusing to restore through a symlinked parent: $original"
     return 1
   fi
-  parent_canon="$(realpath -m -- "$parent_lex" 2>/dev/null)" || {
+  parent_canon="$(path_resolve "$parent_lex" 2>/dev/null)" || {
     log_error "Could not resolve restore destination parent: $parent_lex"
     return 1
   }
@@ -1265,7 +1265,7 @@ backup_restore_destination_verify() {
   fi
 
   if [[ -n "$mode" && "$v2_type" != "symlink" && ! -L "$dest" ]]; then
-    [[ "$(stat -c '%a' -- "$dest" 2>/dev/null)" == "${mode#0}" ]] || return 1
+    [[ "$(file_mode "$dest" 2>/dev/null)" == "${mode#0}" ]] || return 1
   fi
   return 0
 }
@@ -1287,7 +1287,7 @@ backup_restore_undo_installed() {
     fi
   fi
   if (( had_old == 1 )); then
-    if ! mv -fT -- "$stage/old" "$dest"; then
+    if ! mv_replace "$stage/old" "$dest"; then
       log_error "Could not restore the previous destination: $dest"
       backup_journal_write "ROLLBACK_RESTORE_FAILED" "$dest" "$stage" "$had_old" || true
       return 1
@@ -1340,7 +1340,7 @@ backup_restore_apply() {
     return 1
   fi
 
-  stage="$(mktemp -d -- "$parent/.system-init-restore.XXXXXXXX")" || return 1
+  stage="$(mktemp -d "$parent/.system-init-restore.XXXXXXXX")" || return 1
   new="$stage/new"
   old="$stage/old"
 
@@ -1377,13 +1377,13 @@ backup_restore_apply() {
   # Normalize and verify the mode on the staged inode before moving it into
   # place. This avoids chmod following a symlink planted at the destination.
   if [[ "$v2_type" != "symlink" && ! -L "$new" ]]; then
-    if ! chmod "$mode" -- "$new"; then
+    if ! chmod_mode "$mode" "$new"; then
       log_error "Failed to set the staged file mode: $new"
       backup_journal_write "APPLY_FAILED" "$dest" "$stage" "0" || true
       safe_rm_rf "$stage"
       return 1
     fi
-    if [[ "$(stat -c '%a' -- "$new" 2>/dev/null)" != "${mode#0}" ]]; then
+    if [[ "$(file_mode "$new" 2>/dev/null)" != "${mode#0}" ]]; then
       log_error "Staged file mode verification failed: $new"
       backup_journal_write "APPLY_FAILED" "$dest" "$stage" "0" || true
       safe_rm_rf "$stage"
@@ -1403,7 +1403,7 @@ backup_restore_apply() {
       safe_rm_rf "$stage"
       return 1
     fi
-    if ! mv -fT -- "$dest" "$old"; then
+    if ! mv_replace "$dest" "$old"; then
       log_error "Failed to move the existing destination aside: $dest"
       backup_journal_write "APPLY_FAILED" "$dest" "$stage" "0" || true
       safe_rm_rf "$stage"
@@ -1412,17 +1412,17 @@ backup_restore_apply() {
     had_old=1
     if ! backup_journal_write "MOVED_ASIDE" "$dest" "$stage" "$had_old"; then
       log_error "Could not journal the moved destination; restoring it."
-      mv -fT -- "$old" "$dest" || log_error "Previous data remains at: $old"
+      mv_replace "$old" "$dest" || log_error "Previous data remains at: $old"
       safe_rm_rf "$stage"
       return 1
     fi
   fi
 
-  if ! mv -fT -- "$new" "$dest"; then
+  if ! mv_replace "$new" "$dest"; then
     log_error "Failed to install the restored payload: $dest"
     backup_journal_write "APPLY_FAILED" "$dest" "$stage" "$had_old" || true
     if (( had_old == 1 )); then
-      if mv -fT -- "$old" "$dest"; then
+      if mv_replace "$old" "$dest"; then
         backup_journal_write "ROLLED_BACK_LOCAL" "$dest" "$stage" "$had_old" || true
       else
         log_error "Rollback also failed; previous data remains at: $old"
@@ -1481,7 +1481,7 @@ backup_restore_rollback() {
     fi
   fi
   if [[ "$had_old" == "1" ]]; then
-    if ! mv -fT -- "$stage/old" "$dest"; then
+    if ! mv_replace "$stage/old" "$dest"; then
       log_error "Rollback could not restore $dest; previous data remains at: $stage"
       backup_journal_write "ROLLBACK_RESTORE_FAILED" "$dest" "$stage" "$had_old" || true
       return 1
@@ -1622,15 +1622,15 @@ backup_restore_v2_snapshot() {
   else
     init_private_dir "$STATE_DIR" || return 1
   fi
-  verify_dir="$(mktemp -d -- "$verify_base/.restore-verify.XXXXXXXX")" || {
+  verify_dir="$(mktemp -d "$verify_base/.restore-verify.XXXXXXXX")" || {
     log_error "Could not create a private restore verification directory."
     return 1
   }
-  chmod 700 -- "$verify_dir" || { rm -rf -- "$verify_dir"; return 1; }
+  chmod_mode 700 "$verify_dir" || { rm -rf -- "$verify_dir"; return 1; }
   verify_manifest="$verify_dir/manifest.v2"
   verify_sig="$verify_dir/manifest.v2.sig"
   plan="$verify_dir/plan"
-  if ! install -m 600 -- "$manifest" "$verify_manifest"; then
+  if ! install_file 600 "$manifest" "$verify_manifest"; then
     log_error "Could not copy the manifest into protected verification storage."
     rm -rf -- "$verify_dir"
     return 1
@@ -1641,7 +1641,7 @@ backup_restore_v2_snapshot() {
       rm -rf -- "$verify_dir"
       return 1
     }
-    if ! install -m 600 -- "$signature" "$verify_sig"; then
+    if ! install_file 600 "$signature" "$verify_sig"; then
       log_error "Could not copy the signature into protected verification storage."
       rm -rf -- "$verify_dir"
       return 1
@@ -1900,7 +1900,7 @@ backup_restore_snapshot() {
     log_error "Not a valid system-init backup snapshot under $BACKUP_DIR: $snapshot"
     return 1
   }
-  files_root="$(realpath -e -- "$snapshot_root/files" 2>/dev/null)" || {
+  files_root="$(path_canonicalize "$snapshot_root/files" 2>/dev/null)" || {
     log_error "Backup payload directory is missing: $snapshot_root/files"
     return 1
   }
@@ -1908,7 +1908,7 @@ backup_restore_snapshot() {
     log_error "Backup payload directory is unsafe: $files_root"
     return 1
   fi
-  home_raw="$(realpath -m -s -- "$TARGET_HOME" 2>/dev/null)" || {
+  home_raw="$(path_lexical "$TARGET_HOME" 2>/dev/null)" || {
     log_error "Target home directory is not a safe path: $TARGET_HOME"
     return 1
   }
@@ -1916,11 +1916,11 @@ backup_restore_snapshot() {
     log_error "Refusing to restore with / as TARGET_HOME."
     return 1
   fi
-  home_canon="$(realpath -e -- "$TARGET_HOME" 2>/dev/null)" || {
+  home_canon="$(path_canonicalize "$TARGET_HOME" 2>/dev/null)" || {
     log_error "Target home directory is missing: $TARGET_HOME"
     return 1
   }
-  repo_root="$(realpath -e -- "$REPO_ROOT" 2>/dev/null)" || {
+  repo_root="$(path_canonicalize "$REPO_ROOT" 2>/dev/null)" || {
     log_error "Repository root is missing: $REPO_ROOT"
     return 1
   }
@@ -1961,7 +1961,7 @@ backup_restore_recover_journal() {
     log_error "Recovery journal directory is a symlink: $JOURNAL_DIR"
     return 1
   fi
-  journal_dir="$(realpath -e -- "$JOURNAL_DIR" 2>/dev/null)" || {
+  journal_dir="$(path_canonicalize "$JOURNAL_DIR" 2>/dev/null)" || {
     log_error "Recovery journal directory does not exist: $JOURNAL_DIR"
     return 1
   }
@@ -1970,14 +1970,14 @@ backup_restore_recover_journal() {
     return 1
   }
   current_uid="$(id -u)"
-  owner="$(stat -c '%u' -- "$journal_dir" 2>/dev/null)" || return 1
-  perms="$(stat -c '%a' -- "$journal_dir" 2>/dev/null)" || return 1
+  owner="$(file_owner_uid "$journal_dir" 2>/dev/null)" || return 1
+  perms="$(file_mode "$journal_dir" 2>/dev/null)" || return 1
   if [[ "$owner" != "$current_uid" || ! "$perms" =~ ^[0-7]{3,4}$ ]] \
     || (( (8#$perms & 077) != 0 )); then
     log_error "Recovery journal directory has unsafe ownership or permissions: $journal_dir"
     return 1
   fi
-  journal_canon="$(realpath -e -- "$journal" 2>/dev/null)" || return 1
+  journal_canon="$(path_canonicalize "$journal" 2>/dev/null)" || return 1
   [[ "$journal_canon" == "$journal_dir"/* ]] || {
     log_error "Recovery journal is outside the canonical journal directory: $journal"
     return 1
@@ -1995,8 +1995,8 @@ backup_restore_recover_journal() {
     return 1
   }
 
-  owner="$(stat -c '%u' -- "$journal" 2>/dev/null)" || return 1
-  perms="$(stat -c '%a' -- "$journal" 2>/dev/null)" || return 1
+  owner="$(file_owner_uid "$journal" 2>/dev/null)" || return 1
+  perms="$(file_mode "$journal" 2>/dev/null)" || return 1
   [[ "$owner" == "$current_uid" ]] || {
     log_error "Recovery journal is not owned by the current user: $journal"
     return 1
@@ -2006,11 +2006,11 @@ backup_restore_recover_journal() {
     return 1
   }
 
-  home_canon="$(realpath -e -- "$TARGET_HOME" 2>/dev/null)" || {
+  home_canon="$(path_canonicalize "$TARGET_HOME" 2>/dev/null)" || {
     log_error "Target home directory is missing: $TARGET_HOME"
     return 1
   }
-  repo_root="$(realpath -e -- "$REPO_ROOT" 2>/dev/null)" || return 1
+  repo_root="$(path_canonicalize "$REPO_ROOT" 2>/dev/null)" || return 1
   RESTORE_JOURNAL="$journal_canon"
   mapfile -t journal_lines <"$journal_canon" || {
     log_error "Could not read the recovery journal: $journal_canon"
@@ -2076,7 +2076,7 @@ backup_restore_recover_journal() {
       unresolved=$((unresolved + 1))
       continue
     fi
-    dest_canon="$(realpath -m -- "$dest" 2>/dev/null)" || {
+    dest_canon="$(path_resolve "$dest" 2>/dev/null)" || {
       log_error "Could not canonicalize journal destination: $dest"
       unresolved=$((unresolved + 1))
       continue
@@ -2103,7 +2103,7 @@ backup_restore_recover_journal() {
       continue
     fi
 
-    stage_canon="$(realpath -e -- "$stage" 2>/dev/null)" || {
+    stage_canon="$(path_canonicalize "$stage" 2>/dev/null)" || {
       log_error "Journal staging directory is missing: $stage"
       unresolved=$((unresolved + 1))
       continue
@@ -2124,8 +2124,8 @@ backup_restore_recover_journal() {
       unresolved=$((unresolved + 1))
       continue
     }
-    stage_perms="$(stat -c '%a' -- "$stage_canon" 2>/dev/null)" || stage_perms=""
-    owner="$(stat -c '%u' -- "$stage_canon" 2>/dev/null)" || owner=""
+    stage_perms="$(file_mode "$stage_canon" 2>/dev/null)" || stage_perms=""
+    owner="$(file_owner_uid "$stage_canon" 2>/dev/null)" || owner=""
     if [[ "$owner" != "$current_uid" || ! "$stage_perms" =~ ^[0-7]{3,4}$ ]] \
       || (( (8#$stage_perms & 077) != 0 )); then
       log_error "Journal staging directory has unsafe ownership or permissions: $stage"
@@ -2184,7 +2184,7 @@ backup_restore_recover_journal() {
       unresolved=$((unresolved + 1))
       continue
     fi
-    if ! mv -fT -- "$old" "$dest"; then
+    if ! mv_replace "$old" "$dest"; then
       log_error "Recovery failed for $dest; previous data remains at $stage_canon/old"
       unresolved=$((unresolved + 1))
       continue

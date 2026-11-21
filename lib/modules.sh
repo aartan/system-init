@@ -37,14 +37,14 @@ modules_hook_path() {
 
   module_name_is_valid "$module" || return 1
 
-  modules_root="$(realpath -e -- "$REPO_ROOT/modules" 2>/dev/null)" || return 1
+  modules_root="$(path_canonicalize "$REPO_ROOT/modules" 2>/dev/null)" || return 1
   module_dir="$modules_root/$module"
   [[ -d "$module_dir" && ! -L "$module_dir" ]] || return 1
 
   hook="$module_dir/post-install.sh"
   [[ -f "$hook" && ! -L "$hook" ]] || return 1
 
-  resolved="$(realpath -e -- "$hook" 2>/dev/null)" || return 1
+  resolved="$(path_canonicalize "$hook" 2>/dev/null)" || return 1
   [[ "$resolved" == "$modules_root"/* ]] || return 1
   printf '%s\n' "$resolved"
 }

@@ -8,12 +8,21 @@ fi
 DEV_SETUP_COMMON_SOURCED=1
 
 # Repository scripts must never resolve privileged commands through a
-# user-controlled PATH. Entrypoints apply the same value before sourcing this
-# file; repeating it here keeps library-only callers safe as well.
-PATH=/usr/sbin:/usr/bin:/sbin:/bin
+# user-controlled PATH. Fedora keeps the system-only PATH. macOS needs the
+# validated Homebrew prefix for brew, bash and the requested CLI tools.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+else
+  PATH=/usr/sbin:/usr/bin:/sbin:/bin
+fi
 export PATH
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
+
+# shellcheck source=compat.sh
+source "$REPO_ROOT/lib/compat.sh"
+# shellcheck source=report.sh
+source "$REPO_ROOT/lib/report.sh"
 
 # Resolve the target home without rejecting a legitimate symlinked $HOME.
 # Existing components are followed so the canonical spelling is used for state
@@ -22,11 +31,7 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 target_home_resolve() {
   local home="${1:-$TARGET_HOME}"
   [[ -n "$home" && "$home" == /* ]] || return 1
-  if [[ -e "$home" ]]; then
-    realpath -e -- "$home" 2>/dev/null
-  else
-    realpath -m -- "$home" 2>/dev/null
-  fi
+  path_resolve "$home"
 }
 
 TARGET_HOME="${DEV_SETUP_TARGET_HOME:-$HOME}"
@@ -46,7 +51,7 @@ _state_base="${XDG_STATE_HOME:-$TARGET_HOME/.local/state}"
 if [[ "$_state_base" != /* ]]; then
   _state_base="$TARGET_HOME/.local/state"
 fi
-if _resolved_state_base="$(realpath -m -- "$_state_base" 2>/dev/null)"; then
+if _resolved_state_base="$(path_resolve "$_state_base" 2>/dev/null)"; then
   _state_base="$_resolved_state_base"
 fi
 unset _resolved_state_base
@@ -243,7 +248,7 @@ git_checkout_permissions_safe() {
   local path="${1:-}"
   local perms item
   for item in "$path" "$path/.git" "$path/.git/config"; do
-    perms="$(stat -c '%a' -- "$item" 2>/dev/null)" || return 1
+    perms="$(file_mode "$item" 2>/dev/null)" || return 1
     [[ "$perms" =~ ^[0-7]{3,4}$ ]] || return 1
     (( (8#$perms & 022) == 0 )) || return 1
   done
@@ -261,9 +266,9 @@ git_checkout_owned_by_user() {
 
   git_checkout_metadata_safe "$path" || return 1
   uid="$(id -u)"
-  current="$(stat -c '%u' -- "$path" 2>/dev/null)" || return 1
+  current="$(file_owner_uid "$path" 2>/dev/null)" || return 1
   [[ "$current" == "$uid" ]] || return 1
-  current="$(stat -c '%u' -- "$path/.git" 2>/dev/null)" || return 1
+  current="$(file_owner_uid "$path/.git" 2>/dev/null)" || return 1
   [[ "$current" == "$uid" ]] || return 1
   git_checkout_permissions_safe "$path" || return 1
   git_checkout_config_safe "$path"
@@ -324,7 +329,7 @@ init_private_dir() {
   local old_umask
   old_umask="$(umask)"
   umask 077
-  mkdir -p -- "$directory"
+  mkdir -p "$directory"
   local mkdir_rc=$?
   umask "$old_umask"
   (( mkdir_rc == 0 )) || return 1
@@ -332,7 +337,7 @@ init_private_dir() {
     log_error "Refusing to use a symlink as a private directory: $directory"
     return 1
   }
-  chmod 700 -- "$directory"
+  chmod_mode 700 "$directory"
 }
 
 # Create a directory exclusively. Returns 0 only if this process created it.
@@ -344,14 +349,14 @@ create_private_dir_exclusive() {
   [[ ! -L "$directory" ]] || return 1
   old_umask="$(umask)"
   umask 077
-  if mkdir -- "$directory" 2>/dev/null; then
+  if mkdir "$directory" 2>/dev/null; then
     umask "$old_umask"
   else
     local rc=$?
     umask "$old_umask"
     return "$rc"
   fi
-  chmod 700 -- "$directory"
+  chmod_mode 700 "$directory"
 }
 
 # Serialize destructive state operations. This is an advisory lock: it cannot
@@ -368,13 +373,8 @@ state_lock_owner_tuple() {
   local start="" boot=""
 
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  if [[ -r "/proc/$pid/stat" ]]; then
-    local stat_line
-    stat_line="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
-    stat_line="${stat_line##*) }"
-    start="$(awk '{ print $20 }' <<<"$stat_line")"
-  fi
-  [[ -r /proc/sys/kernel/random/boot_id ]] && boot="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+  start="$(process_start_time "$pid" 2>/dev/null || true)"
+  boot="$(boot_identity 2>/dev/null || true)"
   printf '%s\t%s\t%s\n' "$pid" "$start" "$boot"
 }
 
@@ -386,15 +386,12 @@ state_lock_owner_is_live() {
   IFS=$'\t' read -r owner_pid owner_start owner_boot <"$pidfile" || true
   [[ "$owner_pid" =~ ^[0-9]+$ ]] || return 1
   kill -0 "$owner_pid" 2>/dev/null || return 1
-  if [[ -n "$owner_start" && -r "/proc/$owner_pid/stat" ]]; then
-    local stat_line
-    stat_line="$(cat "/proc/$owner_pid/stat" 2>/dev/null || true)"
-    stat_line="${stat_line##*) }"
-    current_start="$(awk '{ print $20 }' <<<"$stat_line")"
+  if [[ -n "$owner_start" ]]; then
+    current_start="$(process_start_time "$owner_pid" 2>/dev/null || true)"
     [[ -n "$current_start" && "$current_start" == "$owner_start" ]] || return 1
   fi
-  if [[ -n "$owner_boot" && -r /proc/sys/kernel/random/boot_id ]]; then
-    current_boot="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+  if [[ -n "$owner_boot" ]]; then
+    current_boot="$(boot_identity 2>/dev/null || true)"
     [[ -n "$current_boot" && "$current_boot" == "$owner_boot" ]] || return 1
   fi
   return 0
@@ -410,7 +407,7 @@ state_lock_acquire() {
   lockfile="$STATE_DIR/${name}.lock"
   if have_command flock; then
     exec {STATE_LOCK_FD}>"$lockfile" || return 1
-    chmod 600 -- "$lockfile" 2>/dev/null || true
+    chmod_mode 600 "$lockfile" 2>/dev/null || true
     if ! flock -n "$STATE_LOCK_FD"; then
       log_error "Another system-init operation is already running (lock: $lockfile)."
       eval "exec ${STATE_LOCK_FD}>&-"
@@ -436,7 +433,7 @@ state_lock_acquire() {
     }
   done
   state_lock_owner_tuple "$$" >"$STATE_LOCK_DIR/pid" || return 1
-  chmod 600 -- "$STATE_LOCK_DIR/pid" 2>/dev/null || true
+  chmod_mode 600 "$STATE_LOCK_DIR/pid" 2>/dev/null || true
   STATE_LOCK_HELD=1
 }
 
@@ -454,43 +451,8 @@ state_lock_release() {
   STATE_LOCK_HELD=0
 }
 
-# Recursive deletion that refuses to cross a mount point below the target.
-# rm -rf itself does not follow symlinks, but it does recurse through mounts.
-safe_rm_rf() {
-  local target="${1:-}"
-  local mount
-
-  [[ -n "$target" && "$target" == /* && "$target" != "/" && "$target" != *..* ]] || return 1
-  if path_has_symlink_component "$target" /; then
-    log_error "Refusing recursive deletion through a symlinked path: $target"
-    return 1
-  fi
-  # Deleting a tree without mount-point inspection can recurse into a mounted
-  # filesystem. Fail closed rather than falling back to unrestricted rm -rf.
-  if ! have_command findmnt || [[ ! -r /proc/self/mountinfo ]]; then
-    log_error "Refusing recursive deletion: mount-point inspection is unavailable."
-    return 1
-  fi
-  if [[ -e "$target" ]]; then
-    local target_mount
-    if ! target_mount="$(findmnt -rn -o TARGET -T "$target" 2>/dev/null)"; then
-      log_error "Refusing recursive deletion: cannot verify the target mount."
-      return 1
-    fi
-    if [[ -n "$target_mount" && "$target_mount" == "$target" ]]; then
-      log_error "Refusing recursive deletion of a mount point: $target"
-      return 1
-    fi
-  fi
-  while IFS= read -r mount; do
-    [[ -z "$mount" || "$mount" == "$target" ]] && continue
-    log_error "Refusing recursive deletion across mount point: $mount"
-    return 1
-  done < <(findmnt -rn -o TARGET -R -- "$target" 2>/dev/null || true)
-  # --one-file-system is a second line of defense against a mount appearing
-  # between inspection and deletion.
-  rm -rf --one-file-system -- "$target"
-}
+# safe_rm_rf() lives in lib/compat.sh and uses the native mount/deletion
+# primitives for the current platform.
 
 # Atomically create or replace a private state file. The temporary file is
 # created inside the already-validated parent directory, so a symlink planted
@@ -514,8 +476,8 @@ write_private_file() {
     return 1
   }
 
-  tmp="$(mktemp -- "$dir/.$(basename -- "$file").XXXXXXXX")" || return 1
-  chmod 600 -- "$tmp" || {
+  tmp="$(mktemp "$dir/.$(basename -- "$file").XXXXXXXX")" || return 1
+  chmod_mode 600 "$tmp" || {
     rm -f -- "$tmp"
     return 1
   }
@@ -523,9 +485,9 @@ write_private_file() {
     rm -f -- "$tmp"
     return 1
   fi
-  # -T treats the destination as a normal file. Without it, GNU mv follows a
-  # symlink-to-directory and moves the temporary file inside the target.
-  if ! mv -fT -- "$tmp" "$file"; then
+  # The platform-specific replace keeps a symlink at the destination from
+  # being followed.
+  if ! mv_replace "$tmp" "$file"; then
     rm -f -- "$tmp"
     return 1
   fi
@@ -558,7 +520,7 @@ state_dir_is_safe() {
     return 1
   fi
 
-  resolved="$(realpath -e -- "$STATE_DIR" 2>/dev/null)" || return 1
+  resolved="$(path_canonicalize "$STATE_DIR" 2>/dev/null)" || return 1
   [[ "$(basename -- "$resolved")" == "system-init" ]]
 }
 
@@ -583,7 +545,12 @@ make_tmp_dir() {
     TMP_DIR=""
     return 1
   fi
-  TMP_DIR="$(mktemp -d -- "$tmp_base/system-init.XXXXXXXX")" || {
+  # macOS exposes /var and /tmp as symlinks. Canonicalize the base so the
+  # symlink-component checks do not reject every temporary path.
+  if [[ -d "$tmp_base" ]]; then
+    tmp_base="$(path_canonicalize "$tmp_base" 2>/dev/null || printf '%s' "$tmp_base")"
+  fi
+  TMP_DIR="$(mktemp -d "$tmp_base/system-init.XXXXXXXX")" || {
     TMP_DIR=""
     return 1
   }
@@ -603,8 +570,8 @@ path_is_under() {
 
   [[ -n "$path" && -n "$root" ]] || return 1
 
-  resolved_root="$(realpath -m -s -- "$root" 2>/dev/null)" || return 1
-  resolved_path="$(realpath -m -s -- "$path" 2>/dev/null)" || return 1
+  resolved_root="$(path_lexical "$root" 2>/dev/null)" || return 1
+  resolved_path="$(path_lexical "$path" 2>/dev/null)" || return 1
 
   if [[ "$resolved_root" == "/" ]]; then
     [[ "$resolved_path" == /* && "$resolved_path" != "/" ]]
@@ -621,13 +588,9 @@ path_resolves_under() {
 
   [[ -n "$path" && -n "$root" ]] || return 1
 
-  resolved_root="$(realpath -m -- "$root" 2>/dev/null)" || return 1
-  resolved_path="$(realpath -m -- "$path" 2>/dev/null)" || return 1
+  resolved_root="$(path_resolve "$root" 2>/dev/null)" || return 1
+  resolved_path="$(path_resolve "$path" 2>/dev/null)" || return 1
   [[ "$resolved_path" == "$resolved_root"/* ]]
-}
-
-file_sha256() {
-  sha256sum -- "$1" | awk '{print $1}'
 }
 
 download_verify() {
@@ -715,7 +678,14 @@ extract_archive() {
 }
 
 parse_runtimes() {
-  local line key value
+  local line key value file="$REPO_ROOT/config/runtimes.conf"
+
+  # A platform-specific file replaces the shared pins. macOS intentionally
+  # installs Node.js LTS only, while Fedora keeps the shared set.
+  if [[ -n "${PLATFORM:-}" && -f "$REPO_ROOT/config/runtimes.$PLATFORM.conf" ]]; then
+    file="$REPO_ROOT/config/runtimes.$PLATFORM.conf"
+  fi
+
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%%#*}"
     [[ "$line" =~ ^[[:space:]]*$ ]] && continue
@@ -725,7 +695,7 @@ parse_runtimes() {
     value="$(printf '%s' "$value" | tr -d '[:space:]')"
     [[ -z "$key" || -z "$value" ]] && continue
     printf '%s %s\n' "$key" "$value"
-  done <"$REPO_ROOT/config/runtimes.conf"
+  done <"$file"
 }
 
 runtime_version() {
@@ -742,8 +712,8 @@ backup_snapshot_name_is_valid() {
   [[ "$name" =~ ^[0-9]{8}T[0-9]{6}Z(-[0-9]+)?$ ]] || return 1
   stamp="${name%%-*}"
   human="${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:9:2}:${stamp:11:2}:${stamp:13:2}"
-  [[ "$(date -u -d "$human" '+%Y%m%dT%H%M%SZ' 2>/dev/null)" == "$stamp" ]] || return 1
-  stamp_epoch="$(date -u -d "$human" '+%s' 2>/dev/null)" || return 1
+  timestamp_valid "$human" || return 1
+  stamp_epoch="$(timestamp_epoch "$human" 2>/dev/null)" || return 1
   now_epoch="$(date -u '+%s' 2>/dev/null)" || return 1
   # Reject future-dated names beyond a small clock-skew allowance; a future
   # name would otherwise occupy a retention slot and win --latest.
@@ -760,7 +730,7 @@ prune_backups() {
   (( keep == 0 )) && return 0
   [[ "$DRY_RUN" == "1" ]] && return 0
   [[ -d "$BACKUP_DIR" && ! -L "$BACKUP_DIR" ]] || return 0
-  backup_root="$(realpath -e -- "$BACKUP_DIR" 2>/dev/null)" || return 0
+  backup_root="$(path_canonicalize "$BACKUP_DIR" 2>/dev/null)" || return 0
 
   while IFS= read -r entry; do
     [[ -n "$entry" ]] || continue

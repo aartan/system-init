@@ -47,8 +47,8 @@ git_identity_write_atomic() {
     return 1
   }
 
-  tmp="$(mktemp -- "$dir/.gitconfig.local.XXXXXXXX")" || return 1
-  chmod 600 -- "$tmp" || { rm -f -- "$tmp"; return 1; }
+  tmp="$(mktemp "$dir/.gitconfig.local.XXXXXXXX")" || return 1
+  chmod_mode 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   if [[ -f "$target" ]]; then
     if ! cp -- "$target" "$tmp"; then
       log_error "Could not copy the existing Git identity file."
@@ -74,8 +74,8 @@ git_identity_write_atomic() {
     rm -f -- "$tmp" "$tmp.lock"
     return 1
   fi
-  chmod 600 -- "$tmp" || { rm -f -- "$tmp" "$tmp.lock"; return 1; }
-  if ! mv -fT -- "$tmp" "$target"; then
+  chmod_mode 600 "$tmp" || { rm -f -- "$tmp" "$tmp.lock"; return 1; }
+  if ! mv_replace "$tmp" "$target"; then
     log_error "Could not atomically install the Git identity file."
     rm -f -- "$tmp" "$tmp.lock"
     return 1
