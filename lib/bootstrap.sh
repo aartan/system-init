@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# macOS bootstrap: Homebrew, Bash 5, PATH policy, and the single confirmation.
+# macOS bootstrap: Homebrew, Bash 5, PATH policy, and the one-time
+# prerequisite confirmation.
 #
 # This file is intentionally compatible with the Bash 3.2 shipped by macOS.
 # It is sourced before lib/common.sh, so it must not use Bash 4+ syntax.
@@ -15,6 +16,8 @@ BREW_BIN="$BREW_PREFIX/bin/brew"
 BOOTSTRAP_BASH="$BREW_PREFIX/bin/bash"
 BOOTSTRAP_DRY_RUN=0
 BOOTSTRAP_ASSUME_YES=0
+BOOTSTRAP_NON_INTERACTIVE=0
+BOOTSTRAP_LIST=0
 BOOTSTRAP_PROFILE=""
 BOOTSTRAP_MODULES=""
 
@@ -30,6 +33,8 @@ bootstrap_scan_args() {
   local argument
   BOOTSTRAP_DRY_RUN=0
   BOOTSTRAP_ASSUME_YES=0
+  BOOTSTRAP_NON_INTERACTIVE=0
+  BOOTSTRAP_LIST=0
   BOOTSTRAP_PROFILE=""
   BOOTSTRAP_MODULES=""
 
@@ -39,8 +44,15 @@ bootstrap_scan_args() {
       --dry-run)
         BOOTSTRAP_DRY_RUN=1
         ;;
-      --yes|-y|--non-interactive)
+      --yes|-y)
         BOOTSTRAP_ASSUME_YES=1
+        ;;
+      --non-interactive)
+        BOOTSTRAP_ASSUME_YES=1
+        BOOTSTRAP_NON_INTERACTIVE=1
+        ;;
+      --list)
+        BOOTSTRAP_LIST=1
         ;;
       --profile)
         if (( $# >= 2 )); then
@@ -87,6 +99,11 @@ bootstrap_homebrew_present() {
   [[ -x "$BREW_BIN" ]]
 }
 
+bootstrap_homebrew_usable() {
+  bootstrap_homebrew_present || return 1
+  "$BREW_BIN" --prefix >/dev/null 2>&1
+}
+
 bootstrap_profile_modules() {
   local profile="$1"
   local module
@@ -115,6 +132,62 @@ bootstrap_profile_modules() {
   esac
 }
 
+bootstrap_prompt_profile() {
+  local choice
+
+  printf '\nInstallation profile:\n'
+  printf '  1) Core development (required packages only)\n'
+  printf '  2) Extended workstation (all modules, including optional desktop apps)\n'
+
+  while true; do
+    printf 'Select [1/2] (default 1): '
+    if ! read -r choice; then
+      printf '\n'
+      BOOTSTRAP_PROFILE=core
+      return 0
+    fi
+    case "$choice" in
+      1|"")
+        BOOTSTRAP_PROFILE=core
+        return 0
+        ;;
+      2)
+        BOOTSTRAP_PROFILE=extended
+        return 0
+        ;;
+      *)
+        printf 'Enter 1 or 2.\n'
+        ;;
+    esac
+  done
+}
+
+# Ask for the profile before the bootstrap plan so the package list is accurate.
+# The selection is exported for the re-exec so the main installer does not ask
+# the same question twice.
+bootstrap_select_profile() {
+  if [[ -n "$BOOTSTRAP_MODULES" || "$BOOTSTRAP_LIST" == "1" ]]; then
+    return 0
+  fi
+  case "${BOOTSTRAP_PROFILE:-}" in
+    "")
+      ;;
+    core|extended)
+      return 0
+      ;;
+    *)
+      bootstrap_error "Unknown profile: $BOOTSTRAP_PROFILE (expected core or extended)."
+      exit 2
+      ;;
+  esac
+  if (( BOOTSTRAP_NON_INTERACTIVE == 1 )) || [[ ! -t 0 ]]; then
+    BOOTSTRAP_PROFILE=core
+    return 0
+  fi
+  bootstrap_prompt_profile
+  export DEV_SETUP_BOOTSTRAP_PROFILE="$BOOTSTRAP_PROFILE"
+}
+
 bootstrap_selected_modules() {
   local module
   if [[ -n "$BOOTSTRAP_MODULES" ]]; then
@@ -124,19 +197,20 @@ bootstrap_selected_modules() {
     done
     return 0
   fi
-  bootstrap_profile_modules "${BOOTSTRAP_PROFILE:-${MACOS_DEFAULT_PROFILE:-extended}}"
+  bootstrap_profile_modules "${BOOTSTRAP_PROFILE:-core}"
 }
 
 bootstrap_print_plan() {
   local module line manager package optional count=0
-  local profile="${BOOTSTRAP_PROFILE:-${MACOS_DEFAULT_PROFILE:-extended}}"
+  local profile="${BOOTSTRAP_PROFILE:-core}"
 
   bootstrap_say "macOS bootstrap plan"
   bootstrap_say "  Platform: macOS $(sw_vers -productVersion 2>/dev/null || printf unknown) ($(uname -m))"
-  bootstrap_say "  Profile:  $profile"
   if [[ -n "$BOOTSTRAP_MODULES" ]]; then
+    bootstrap_say "  Profile:  custom modules"
     bootstrap_say "  Modules:  $BOOTSTRAP_MODULES"
   else
+    bootstrap_say "  Profile:  $profile"
     bootstrap_say "  Modules:  $(bootstrap_selected_modules | tr '\n' ' ')"
   fi
   bootstrap_say ""
@@ -332,6 +406,12 @@ bootstrap_run() {
   bootstrap_apply_path
   bootstrap_scan_args "$@"
 
+  if bootstrap_homebrew_present && ! bootstrap_homebrew_usable; then
+    bootstrap_error "Homebrew exists at $BREW_PREFIX but is not usable."
+    bootstrap_error "Repair it with 'brew doctor' or remove it, then rerun ./install.sh."
+    exit 1
+  fi
+
   if [[ -n "${DEV_SETUP_BASH_REEXEC:-}" ]] && (( $(bootstrap_bash_major) >= 5 )); then
     return 0
   fi
@@ -372,6 +452,7 @@ bootstrap_run() {
     source "$REPO_ROOT/config/pins.conf"
   fi
 
+  bootstrap_select_profile
   bootstrap_print_plan
   if (( BOOTSTRAP_DRY_RUN == 1 )); then
     bootstrap_say ""
@@ -396,7 +477,6 @@ bootstrap_run() {
   fi
 
   export DEV_SETUP_BASH_REEXEC=1
-  export DEV_SETUP_CONFIRMED=1
   bootstrap_say "Re-executing with $BOOTSTRAP_BASH."
   exec "$BOOTSTRAP_BASH" "$0" "$@"
 }

@@ -70,7 +70,6 @@ REQUESTED_MODULES=()
 MODULE_OPTION_GIVEN=0
 SHOW_LIST=0
 PROFILE=""
-ASSUME_YES=0
 NON_INTERACTIVE=0
 INSTALL_OK=0
 GIT_IDENTITY_NAME=""
@@ -82,9 +81,8 @@ usage() {
   cat <<'EOF'
 Usage: ./install.sh [OPTIONS]
 
-Install a development workstation. On Fedora, an interactive run prompts for
-the core or extended profile and non-interactive runs default to core. On
-macOS the default is extended and the profile prompt is skipped.
+Install a development workstation. An interactive run prompts for the core
+or extended profile; non-interactive runs default to core.
 
 Options:
   --profile NAME     core (development defaults) or extended (all modules and
@@ -93,9 +91,10 @@ Options:
   --no-dotfiles      Install packages and system configuration only.
   --module NAME      Install NAME and its dependencies. Repeatable.
   --list             List modules, package counts, and descriptions.
-  --yes, -y          Skip the macOS installation-plan confirmation.
-  --non-interactive  Never prompt; implies --yes. Uses environment/global
-                     settings for the profile and Git identity.
+  --yes, -y          Skip the one-time macOS Homebrew/Bash bootstrap
+                     confirmation.
+  --non-interactive  Never prompt; implies --yes. Uses the explicit profile or
+                     core, and environment/global Git identity.
   -h, --help         Show this help.
 
 Examples:
@@ -167,10 +166,9 @@ parse_args() {
         SHOW_LIST=1
         ;;
       --yes|-y)
-        ASSUME_YES=1
+        # Consumed by the macOS bootstrap; accepted here for a consistent CLI.
         ;;
       --non-interactive)
-        ASSUME_YES=1
         NON_INTERACTIVE=1
         ;;
       -h|--help)
@@ -222,19 +220,21 @@ select_profile() {
     return 0
   fi
 
-  if (( NON_INTERACTIVE == 1 )); then
-    if [[ "$PLATFORM" == "macos" ]]; then
-      PROFILE="${MACOS_DEFAULT_PROFILE:-extended}"
-    else
-      PROFILE=core
-    fi
-    log_info "Non-interactive run; using the $PROFILE profile."
-    return 0
+  # A fresh macOS bootstrap asks the same profile question before installing
+  # Homebrew/Bash 5, then re-execs. Reuse that answer instead of asking twice.
+  if [[ -n "${DEV_SETUP_BOOTSTRAP_PROFILE:-}" ]]; then
+    case "$DEV_SETUP_BOOTSTRAP_PROFILE" in
+      core|extended)
+        PROFILE="$DEV_SETUP_BOOTSTRAP_PROFILE"
+        log_info "Using the $PROFILE profile selected during bootstrap."
+        return 0
+        ;;
+    esac
   fi
 
-  if [[ "$PLATFORM" == "macos" ]]; then
-    PROFILE="${MACOS_DEFAULT_PROFILE:-extended}"
-    log_info "macOS uses the $PROFILE profile; pass --profile core for a minimal install."
+  if (( NON_INTERACTIVE == 1 )); then
+    PROFILE=core
+    log_info "Non-interactive run; using the core profile."
     return 0
   fi
 
@@ -281,73 +281,6 @@ apply_profile() {
     [[ -z "$module" ]] && continue
     REQUESTED_MODULES+=("$module")
   done < <(modules_profile_modules "$PROFILE")
-}
-
-install_print_plan() {
-  local module line manager package optional count=0
-
-  printf '\nInstallation plan:\n'
-  printf '  Platform: %s (%s)\n' "$PLATFORM_NAME" "$PLATFORM_ARCH"
-  printf '  Profile:  %s\n' "${PROFILE:-custom modules}"
-  printf '  Modules:  %s\n' "${SELECTED_MODULES[*]}"
-  printf '\nPackages:\n'
-  for module in "${SELECTED_MODULES[@]}"; do
-    while IFS= read -r line; do
-      [[ -z "$line" ]] && continue
-      read -r manager package optional <<<"$line"
-      [[ -n "${manager:-}" && -n "${package:-}" ]] || continue
-      printf '  %-5s %s\n' "$manager" "$package"
-      count=$((count + 1))
-    done < <(packages_list_module "$module")
-  done
-  printf '  (%s package declarations)\n' "$count"
-  printf '\nOther actions:\n'
-  if [[ "$PLATFORM" == "macos" ]]; then
-    printf '  Fonts:   Nerd Fonts v%s into %s\n' "$NERD_FONTS_VERSION" \
-      "$TARGET_HOME/Library/Fonts"
-  else
-    printf '  Fonts:   Nerd Fonts v%s into %s\n' "$NERD_FONTS_VERSION" \
-      "$TARGET_HOME/.local/share/fonts"
-  fi
-  printf '  Dotfiles: managed links with pre-install backups\n'
-  if [[ "$PLATFORM" == "macos" ]]; then
-    printf '  Podman:  machine auto-setup %s (machine: %s)\n' \
-      "$([[ "${PODMAN_MACHINE_AUTO:-1}" == "1" ]] && printf enabled || printf disabled)" \
-      "${PODMAN_MACHINE_NAME:-default}"
-    printf '  Alacritty: v%s from the pinned official DMG\n' "$ALACRITTY_VERSION"
-    printf '  Shell:   /bin/zsh, Oh My Zsh, Starship, plugins\n'
-  fi
-  printf '  Git identity: prompt for name and email; stored in ~/.gitconfig.local\n'
-}
-
-install_confirm() {
-  local answer
-
-  [[ "$PLATFORM" == "macos" ]] || return 0
-  [[ "$DRY_RUN" == "1" ]] && {
-    install_print_plan
-    return 0
-  }
-  [[ "${DEV_SETUP_CONFIRMED:-0}" == "1" ]] && return 0
-  [[ "$ASSUME_YES" == "1" ]] && {
-    install_print_plan
-    return 0
-  }
-
-  install_print_plan
-  if [[ ! -t 0 ]]; then
-    log_error "No interactive terminal. Re-run with --yes or --non-interactive."
-    return 2
-  fi
-  printf '\nProceed with this plan? [y/N] '
-  if ! read -r answer; then
-    printf '\n'
-    return 1
-  fi
-  case "$answer" in
-    [yY]|[yY][eE][sS]) return 0 ;;
-    *) return 1 ;;
-  esac
 }
 
 git_identity_current() {
@@ -461,6 +394,8 @@ prompt_restart() {
   local answer
 
   [[ "$DRY_RUN" == "1" ]] && return 0
+  # macOS has used /bin/zsh as the default login shell since Catalina, and the
+  # installer only configures zsh. A new terminal is sufficient on macOS.
   [[ "$PLATFORM" == "macos" ]] && return 0
   (( NON_INTERACTIVE == 1 )) && return 0
   [[ -t 0 ]] || return 0
@@ -575,16 +510,6 @@ main() {
     printf 'Platform: %s (%s)\n' "$PLATFORM_NAME" "$PLATFORM_ARCH"
     printf 'Modules:\n\n'
     modules_list
-    exit 0
-  fi
-
-  local confirm_status=0
-  install_confirm || confirm_status=$?
-  if (( confirm_status == 2 )); then
-    log_error "Installation aborted."
-    exit 1
-  elif (( confirm_status != 0 )); then
-    log_info "Installation cancelled."
     exit 0
   fi
 
